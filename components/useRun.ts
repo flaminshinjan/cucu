@@ -8,6 +8,7 @@ import type {
   PlatformCopy,
   RunStage,
   StreamEvent,
+  StudioConfig,
 } from "@/lib/types";
 
 interface RunUIState {
@@ -121,7 +122,7 @@ export function useRun() {
   const [state, dispatch] = useReducer(reducer, initial);
   const esRef = useRef<EventSource | null>(null);
 
-  const start = useCallback(async (message: string, url?: string) => {
+  const start = useCallback(async (message: string, opts?: { url?: string; studio?: StudioConfig | null }): Promise<string> => {
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -130,7 +131,7 @@ export function useRun() {
     const res = await fetch("/api/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message, url }),
+      body: JSON.stringify({ message, url: opts?.url, studio: opts?.studio ?? undefined }),
     });
     if (!res.ok) {
       throw new Error(`Failed to start run: ${res.status}`);
@@ -166,6 +167,7 @@ export function useRun() {
       "complete",
       "error",
     ].forEach((t) => es.addEventListener(t, handler as EventListener));
+    return runId;
   }, []);
 
   const reset = useCallback(() => {

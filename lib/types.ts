@@ -69,6 +69,15 @@ export interface ContentAssets {
   scriptHash: string;
 }
 
+export interface BRollImage {
+  url: string;
+  /** Optional caption-style keyword overlaid on the image when shown. */
+  keyword?: string;
+  /** Where in the script the image lands (in seconds). */
+  startAt: number;
+  endAt: number;
+}
+
 export interface PlatformComposition {
   platform: PlatformId;
   copy: PlatformCopy;
@@ -76,6 +85,8 @@ export interface PlatformComposition {
   /** Source video clip (avatar) shared across platforms */
   sourceVideoUrl?: string;
   thumbnailUrl?: string;
+  /** 3 contextual b-roll images cycled on the content side of the marketing composition. */
+  bRoll?: BRollImage[];
   captions: Array<{ start: number; end: number; text: string }>;
 }
 
@@ -99,6 +110,19 @@ export interface CustomBrief {
   audience?: string;
 }
 
+export interface StudioConfig {
+  /** HeyGen talking_photo_id from uploading a user-supplied face image. */
+  talkingPhotoId?: string;
+  /** HeyGen voice_id (cloned via Instant Voice Clone or picked from the library). */
+  voiceId?: string;
+  /** HeyGen avatar_id (picked from the public library). */
+  avatarId?: string;
+  /** Display labels for the UI so we don't lose context after refresh. */
+  talkingPhotoLabel?: string;
+  voiceLabel?: string;
+  avatarLabel?: string;
+}
+
 export interface ContentRun {
   id: string;
   /** The original chat brief the operator typed. */
@@ -106,6 +130,8 @@ export interface ContentRun {
   /** Derived from the message on the server (via Haiku). */
   persona?: BrandPersona;
   brief?: CustomBrief;
+  /** Optional user-supplied face / voice for the avatar render. */
+  studio?: StudioConfig;
   createdAt: number;
   stage: RunStage;
   research?: ResearchOutput;

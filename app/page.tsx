@@ -5,6 +5,8 @@ import { ChatPanel } from "@/components/ChatPanel";
 import { RunStage } from "@/components/RunStage";
 import { Card } from "@/components/ui/card";
 import { useRun } from "@/components/useRun";
+import { useStudioConfig } from "@/components/useStudioConfig";
+import { useChatHistory } from "@/components/useChatHistory";
 import { cn } from "@/lib/utils";
 
 interface Caps {
@@ -24,7 +26,9 @@ interface Example {
 export default function Home() {
   const [examples, setExamples] = useState<Example[]>([]);
   const [capabilities, setCapabilities] = useState<Caps | null>(null);
-  const { state, start, reset } = useRun();
+  const { state, start, reset: _reset } = useRun();
+  const { config: studioConfig, setConfig: setStudioConfig } = useStudioConfig();
+  void _reset;
 
   useEffect(() => {
     void fetch("/api/personas")
@@ -39,11 +43,26 @@ export default function Home() {
   const persona = state.run.persona ?? null;
   const running = state.runId !== null && state.stage !== "done" && state.stage !== "error";
   const hasRun = state.runId !== null;
-  const hasResult = state.stage === "done" && (state.run.compositions?.length ?? 0) > 0;
 
-  async function handleRun(message: string) {
+  const { messages, appendUser } = useChatHistory({
+    runId: state.runId,
+    stage: state.stage,
+    hero: state.run.strategy?.hero?.angle,
+    persona: state.run.persona,
+    videoCount: state.run.compositions?.length ?? 0,
+    error: state.error,
+  });
+
+  async function handleSend(message: string) {
     try {
-      await start(message);
+      // Kick off the run, then append a user+cucu message pair tied to the new runId.
+      // We do this in order: start() resolves with the run id, then chat history
+      // mirrors the live run state.
+      // useRun.start dispatches a "start" action with the runId — we'll grab it
+      // from the next state. For simplicity we patch the chat history via the
+      // resolved runId returned by start.
+      const runId = await start(message, { studio: studioConfig });
+      if (runId) appendUser(message, runId);
     } catch (e) {
       console.error(e);
     }
@@ -57,12 +76,13 @@ export default function Home() {
         <Card className="p-5 min-h-0 overflow-hidden flex flex-col">
           <ChatPanel
             examples={examples}
-            derivedPersona={persona ?? undefined}
+            messages={messages}
             running={running}
-            hasResult={hasResult}
-            onRun={handleRun}
-            onReset={reset}
+            activeRunId={state.runId}
+            onSend={handleSend}
             capabilities={capabilities}
+            studioConfig={studioConfig}
+            onStudioChange={setStudioConfig}
           />
         </Card>
 

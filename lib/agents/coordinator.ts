@@ -37,6 +37,7 @@ export async function orchestrate(run: ContentRun, persona: BrandPersona): Promi
       persona,
       strategy,
       copies,
+      run.studio,
     );
 
     setStage(run.id, "composing");

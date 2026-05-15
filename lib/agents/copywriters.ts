@@ -33,8 +33,33 @@ export async function runCopywriters(
     });
   }
 
+  // Isolate per-platform failures so one bad write can't crash the whole stage.
+  // Each writeOne is wrapped: try once, retry once with a stricter "valid JSON only"
+  // reminder, then fall back to a salvageable placeholder.
   const drafts = await Promise.all(
-    PLATFORM_ORDER.map((p) => writeOne(runId, persona, research, strategy, p)),
+    PLATFORM_ORDER.map(async (p) => {
+      try {
+        return await writeOne(runId, persona, research, strategy, p);
+      } catch (e1) {
+        emit(runId, {
+          ts: Date.now(),
+          agent: AGENT_MAP[p],
+          type: "thinking",
+          message: `Retrying after parse error: ${truncate((e1 as Error)?.message)}`,
+        });
+        try {
+          return await writeOne(runId, persona, research, strategy, p);
+        } catch (e2) {
+          emit(runId, {
+            ts: Date.now(),
+            agent: AGENT_MAP[p],
+            type: "error",
+            message: `Copy generation failed: ${truncate((e2 as Error)?.message)}. Using fallback.`,
+          });
+          return fallbackCopy(persona, strategy, p);
+        }
+      }
+    }),
   );
 
   // Brand-voice consistency pass with Sonnet
@@ -243,4 +268,35 @@ function buildMockCopy(p: BrandPersona, s: StrategyOutput, platform: PlatformId)
           hashtags: [],
         },
   );
+}
+
+function truncate(s: string | undefined, n = 120): string {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+/**
+ * Last-resort placeholder used when an LLM copy generation fails twice.
+ * Keeps the platform composition shippable so the rest of the demo still runs.
+ */
+function fallbackCopy(
+  persona: BrandPersona,
+  strategy: StrategyOutput,
+  platformId: PlatformId,
+): PlatformCopy {
+  const hook = strategy.hero.angle;
+  const body = `${strategy.hero.hypothesis}\n\n${persona.tagline}`;
+  const cta = `Learn more about ${persona.name}.`;
+  const fullText = `${hook}\n\n${body}\n\n${cta}`;
+  return {
+    platform: platformId,
+    hook,
+    body,
+    cta,
+    hashtags: [],
+    meta: {
+      characterCount: fullText.length,
+      estimatedReadSeconds: Math.max(5, Math.round(fullText.split(/\s+/).length / 2.5)),
+    },
+  };
 }

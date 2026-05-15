@@ -12,6 +12,16 @@ export const dynamic = "force-dynamic";
 const Body = z.object({
   message: z.string().trim().min(2).max(4000),
   url: z.string().trim().max(2048).optional(),
+  studio: z
+    .object({
+      talkingPhotoId: z.string().trim().max(200).optional(),
+      voiceId: z.string().trim().max(200).optional(),
+      avatarId: z.string().trim().max(200).optional(),
+      talkingPhotoLabel: z.string().trim().max(200).optional(),
+      voiceLabel: z.string().trim().max(200).optional(),
+      avatarLabel: z.string().trim().max(200).optional(),
+    })
+    .optional(),
 });
 
 export async function POST(req: Request) {
@@ -29,10 +39,23 @@ export async function POST(req: Request) {
 
   // Skeleton run is created immediately so the SSE stream can attach.
   const runId = uid("r_");
+  const studioRaw = parsed.data.studio;
+  const studio = studioRaw &&
+    (studioRaw.talkingPhotoId || studioRaw.voiceId || studioRaw.avatarId)
+    ? {
+        talkingPhotoId: studioRaw.talkingPhotoId || undefined,
+        voiceId: studioRaw.voiceId || undefined,
+        avatarId: studioRaw.avatarId || undefined,
+        talkingPhotoLabel: studioRaw.talkingPhotoLabel || undefined,
+        voiceLabel: studioRaw.voiceLabel || undefined,
+        avatarLabel: studioRaw.avatarLabel || undefined,
+      }
+    : undefined;
   const run: ContentRun = {
     id: runId,
     message,
     brief: url ? { url, focus: message } : { focus: message },
+    studio,
     createdAt: Date.now(),
     stage: "queued",
   };

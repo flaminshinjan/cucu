@@ -1,9 +1,11 @@
 import type {
+  BRollImage,
   BrandPersona,
   ContentAssets,
   PlatformComposition,
   PlatformCopy,
   StrategyOutput,
+  StudioConfig,
 } from "../types";
 import { PLATFORMS, PLATFORM_ORDER } from "../platforms";
 import { generateVoice } from "../adapters/voice";
@@ -34,6 +36,7 @@ export async function runArtDirector(
   persona: BrandPersona,
   strategy: StrategyOutput,
   copies: PlatformCopy[],
+  studio?: StudioConfig,
 ): Promise<ArtDirectorOutput> {
   // The single canonical script that drives the avatar/voiceover.
   // We use the YouTube Shorts copy as the spoken script — it's already structured for that pace.
@@ -48,16 +51,21 @@ export async function runArtDirector(
     message: "Generating voiceover, avatar, and thumbnails…",
   });
 
-  // Parallel: voice + thumbnails. Avatar waits on voice (which is the cheap path).
+  // Three b-roll beats — derived from the spoken script (hook / build / payoff).
+  const bRollPrompts = buildBRollPrompts(persona, strategy, ytCopy, spokenScript);
+
+  // Parallel: voice + per-platform thumbnails + 3 b-roll images for the content half.
   emit(runId, {
     ts: Date.now(),
     agent: "art-director",
     type: "tool-call",
-    message: "voice.generate · image.flux ×4",
+    message: `voice.generate · image.flux ×${PLATFORM_ORDER.length + bRollPrompts.length}`,
   });
 
-  const [voice, ...thumbs] = await Promise.all([
+  const totalImages = PLATFORM_ORDER.length + bRollPrompts.length;
+  const allImagesAndVoice = await Promise.all([
     generateVoice({ text: spokenScript, gender: persona.voiceGender }),
+    // 4 platform thumbnails (one per platform aspect)
     ...PLATFORM_ORDER.map((id) =>
       generateImage({
         prompt: thumbnailPrompt(persona, strategy, id),
@@ -65,14 +73,35 @@ export async function runArtDirector(
         personaId: persona.id,
       }),
     ),
+    // 3 contextual b-roll images at 16:9 (content half is widescreen-ish on most layouts)
+    ...bRollPrompts.map((p) =>
+      generateImage({
+        prompt: p.prompt,
+        aspectRatio: "16:9",
+        personaId: persona.id,
+      }),
+    ),
   ]);
+
+  const voice = allImagesAndVoice[0] as Awaited<ReturnType<typeof generateVoice>>;
+  const thumbs = allImagesAndVoice.slice(1, 1 + PLATFORM_ORDER.length) as Array<
+    Awaited<ReturnType<typeof generateImage>>
+  >;
+  const bRollImgs = allImagesAndVoice.slice(1 + PLATFORM_ORDER.length) as Array<
+    Awaited<ReturnType<typeof generateImage>>
+  >;
 
   emit(runId, {
     ts: Date.now(),
     agent: "art-director",
     type: "tool-result",
-    message: `Voice ready (${voice.provider}, ${voice.durationSeconds}s) · ${thumbs.length} thumbnails`,
-    data: { voiceProvider: voice.provider, thumbCount: thumbs.length },
+    message: `Voice ready (${voice.provider}, ${voice.durationSeconds}s) · ${thumbs.length} thumbnails · ${bRollImgs.length} b-roll`,
+    data: {
+      voiceProvider: voice.provider,
+      thumbCount: thumbs.length,
+      bRollCount: bRollImgs.length,
+      totalImages,
+    },
   });
 
   // The mock avatar URL — used immediately so the reveal can fire without waiting on HeyGen.
@@ -90,13 +119,25 @@ export async function runArtDirector(
     scriptHash,
   };
 
-  // Build per-platform compositions with timed captions
+  // Distribute the 3 b-roll images evenly across the duration with small overlap.
+  const bRoll: BRollImage[] = bRollImgs.map((img, i) => {
+    const per = estimatedDuration / bRollImgs.length;
+    return {
+      url: img.url,
+      keyword: bRollPrompts[i]?.keyword,
+      startAt: +(i * per).toFixed(2),
+      endAt: +((i + 1) * per).toFixed(2),
+    };
+  });
+
+  // Build per-platform compositions with timed captions + shared b-roll
   const compositions: PlatformComposition[] = PLATFORM_ORDER.map((id, i) => ({
     platform: id,
     copy: copies.find((c) => c.platform === id)!,
     composedAt: Date.now(),
     sourceVideoUrl: mockAvatarUrl,
     thumbnailUrl: thumbs[i]?.url,
+    bRoll,
     captions: buildCaptionTrack(spokenScript, estimatedDuration),
   }));
 
@@ -126,6 +167,13 @@ export async function runArtDirector(
         voiceAudioUrl: voice.url,
         personaId: persona.id,
         gender: persona.voiceGender,
+        studio: studio
+          ? {
+              talkingPhotoId: studio.talkingPhotoId,
+              voiceId: studio.voiceId,
+              avatarId: studio.avatarId,
+            }
+          : undefined,
         onProgress: (p) => {
           if (p.elapsedSeconds === 0 || p.elapsedSeconds % 15 === 0) {
             emit(runId, {
@@ -195,4 +243,35 @@ function buildCaptionTrack(script: string, durationSeconds: number) {
 /** Remove bracketed stage directions like "[Cut to dashboard]" before TTS */
 function stripDirectorNotes(s: string): string {
   return s.replace(/\[[^\]]+\]/g, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Build 3 contextual b-roll prompts (hook / build / payoff) from the script.
+ * Each prompt is brand-aware and uses Flux Schnell-friendly phrasing.
+ */
+function buildBRollPrompts(
+  persona: BrandPersona,
+  strategy: StrategyOutput,
+  ytCopy: PlatformCopy,
+  spokenScript: string,
+): Array<{ keyword: string; prompt: string }> {
+  const styleSuffix = `Editorial photograph, soft natural light, high contrast, shallow depth of field, ${persona.primaryColor} and ${persona.accentColor} brand palette as subtle color accents. No text. No people staring at camera.`;
+  const sentences = spokenScript.split(/(?<=[.!?])\s+/).filter((s) => s.length > 10);
+  const hook = sentences[0] ?? ytCopy.hook;
+  const middle = sentences[Math.floor(sentences.length / 2)] ?? ytCopy.body.slice(0, 120);
+  const payoff = sentences[sentences.length - 1] ?? ytCopy.cta;
+  return [
+    {
+      keyword: "Hook",
+      prompt: `Cinematic open establishing the topic: ${hook}. Industry: ${persona.industry}. ${styleSuffix}`,
+    },
+    {
+      keyword: "Build",
+      prompt: `Mid-arc tension beat illustrating: ${middle}. Industry: ${persona.industry}. ${styleSuffix}`,
+    },
+    {
+      keyword: "Payoff",
+      prompt: `Triumphant closing visual for: ${payoff}. Industry: ${persona.industry}. ${styleSuffix}`,
+    },
+  ];
 }

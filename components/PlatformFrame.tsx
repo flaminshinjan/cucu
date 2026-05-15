@@ -3,7 +3,7 @@
 import { Heart, MessageCircle, Repeat2, Send, Bookmark, MoreHorizontal, ThumbsUp, Share2 } from "lucide-react";
 import type { BrandPersona, PlatformComposition } from "@/lib/types";
 import { PLATFORMS } from "@/lib/platforms";
-import { AvatarPlayer } from "@/components/AvatarPlayer";
+import { MarketingComposition } from "@/components/MarketingComposition";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -79,17 +79,16 @@ function YouTubeFrame(p: Props) {
   return (
     <div className="rounded-2xl overflow-hidden border border-zinc-800 bg-black shadow-2xl">
       <div className="relative w-full aspect-[9/16]">
-        <AvatarPlayer
-          videoUrl={p.avatarVideoUrl}
-          audioUrl={p.voiceAudioUrl}
-          captions={composition.captions}
-          durationSeconds={composition.captions[composition.captions.length - 1]?.end}
+        <MarketingComposition
+          composition={composition}
           persona={persona}
+          voiceAudioUrl={p.voiceAudioUrl}
+          avatarVideoUrl={p.avatarVideoUrl}
           aspect="9:16"
           autoplay={p.autoplay}
         />
         {/* Right rail */}
-        <div className="absolute right-2 bottom-24 flex flex-col items-center gap-3 text-white">
+        <div className="absolute right-2 bottom-24 flex flex-col items-center gap-3 text-white z-20 pointer-events-none">
           <RailButton icon={<ThumbsUp size={16} />} label="14K" />
           <RailButton icon={<MessageCircle size={16} />} label="822" />
           <RailButton icon={<Share2 size={16} />} label="Share" />
@@ -125,17 +124,16 @@ function InstagramFrame(p: Props) {
   return (
     <div className="rounded-2xl overflow-hidden border border-zinc-800 bg-black shadow-2xl">
       <div className="relative w-full aspect-[9/16]">
-        <AvatarPlayer
-          videoUrl={p.avatarVideoUrl}
-          audioUrl={p.voiceAudioUrl}
-          captions={composition.captions}
-          durationSeconds={composition.captions[composition.captions.length - 1]?.end}
+        <MarketingComposition
+          composition={composition}
           persona={persona}
+          voiceAudioUrl={p.voiceAudioUrl}
+          avatarVideoUrl={p.avatarVideoUrl}
           aspect="9:16"
           autoplay={p.autoplay}
         />
         {/* Right rail (heart/comment/share/save) */}
-        <div className="absolute right-2 bottom-24 flex flex-col items-center gap-3 text-white">
+        <div className="absolute right-2 bottom-24 flex flex-col items-center gap-3 text-white z-20 pointer-events-none">
           <RailButton icon={<Heart size={16} />} label="62K" />
           <RailButton icon={<MessageCircle size={16} />} label="" />
           <RailButton icon={<Send size={16} />} label="" />
@@ -202,12 +200,11 @@ function LinkedInFrame(p: Props) {
       </div>
 
       <div className="border-t border-zinc-200">
-        <AvatarPlayer
-          videoUrl={p.avatarVideoUrl}
-          audioUrl={p.voiceAudioUrl}
-          captions={composition.captions}
-          durationSeconds={composition.captions[composition.captions.length - 1]?.end}
+        <MarketingComposition
+          composition={composition}
           persona={persona}
+          voiceAudioUrl={p.voiceAudioUrl}
+          avatarVideoUrl={p.avatarVideoUrl}
           aspect="1:1"
           autoplay={p.autoplay}
         />
@@ -266,12 +263,11 @@ function XFrame(p: Props) {
 
       <div className="px-3 pb-2">
         <div className="rounded-2xl overflow-hidden border border-zinc-800">
-          <AvatarPlayer
-            videoUrl={p.avatarVideoUrl}
-            audioUrl={p.voiceAudioUrl}
-            captions={composition.captions}
-            durationSeconds={composition.captions[composition.captions.length - 1]?.end}
+          <MarketingComposition
+            composition={composition}
             persona={persona}
+            voiceAudioUrl={p.voiceAudioUrl}
+            avatarVideoUrl={p.avatarVideoUrl}
             aspect="16:9"
             autoplay={p.autoplay}
           />

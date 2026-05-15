@@ -10,6 +10,13 @@ export interface AvatarRequest {
   personaId?: string;
   /** Selects an avatar of the matching gender, and a matching voice. */
   gender?: VoiceGender;
+  /** Studio overrides — uploaded by the user via the Studio sheet.
+   *  When present, these win over the auto-discovered HeyGen defaults. */
+  studio?: {
+    talkingPhotoId?: string;
+    voiceId?: string;
+    avatarId?: string;
+  };
   /** Called once per poll tick so the UI can show heartbeat progress */
   onProgress?: (info: { elapsedSeconds: number; status: string }) => void;
 }
@@ -28,7 +35,9 @@ export interface AvatarResult {
  * the real API and store the resulting MP4.
  */
 export async function renderAvatar(req: AvatarRequest): Promise<AvatarResult> {
-  const cacheKey = `avatar/${hashString(req.script + (req.personaId ?? "") + (req.gender ?? ""))}.mp4`;
+  // Cache key includes the studio overrides so a swap of face/voice doesn't hit a stale mp4.
+  const studioKey = `${req.studio?.talkingPhotoId ?? ""}|${req.studio?.voiceId ?? ""}|${req.studio?.avatarId ?? ""}`;
+  const cacheKey = `avatar/${hashString(req.script + (req.personaId ?? "") + (req.gender ?? "") + studioKey)}.mp4`;
   const cached = await storage.get(cacheKey);
   const durationSeconds = estimateDuration(req.script);
 
@@ -151,7 +160,18 @@ async function heygenRender(
   cacheKey: string,
   durationSeconds: number,
 ): Promise<AvatarResult> {
-  const { avatarId, voiceId } = await getHeygenDefaults(req.gender);
+  const defaults = await getHeygenDefaults(req.gender);
+
+  // Studio overrides win over discovered defaults
+  const talkingPhotoId = req.studio?.talkingPhotoId;
+  const avatarId = req.studio?.avatarId ?? defaults.avatarId;
+  const voiceId = req.studio?.voiceId ?? defaults.voiceId;
+
+  // If the user uploaded their face (talking_photo), use it as the character.
+  // Otherwise fall back to a regular avatar id.
+  const character = talkingPhotoId
+    ? { type: "talking_photo" as const, talking_photo_id: talkingPhotoId }
+    : { type: "avatar" as const, avatar_id: avatarId, avatar_style: "normal" };
 
   // HeyGen v2: create video → poll status → download URL
   const create = await fetch("https://api.heygen.com/v2/video/generate", {
@@ -163,7 +183,7 @@ async function heygenRender(
     body: JSON.stringify({
       video_inputs: [
         {
-          character: { type: "avatar", avatar_id: avatarId, avatar_style: "normal" },
+          character,
           voice: { type: "text", input_text: req.script, voice_id: voiceId },
         },
       ],
@@ -176,7 +196,9 @@ async function heygenRender(
   }
   const created = (await create.json()) as { data: { video_id: string } };
   const videoId = created.data.video_id;
-  console.log(`[heygen] video submitted: ${videoId}  avatar=${avatarId}  voice=${voiceId}`);
+  console.log(
+    `[heygen] video submitted: ${videoId}  character=${talkingPhotoId ? `talking_photo:${talkingPhotoId}` : `avatar:${avatarId}`}  voice=${voiceId}`,
+  );
   req.onProgress?.({ elapsedSeconds: 0, status: `submitted (video_id: ${videoId})` });
 
   // Poll up to ~20 minutes. Free-tier HeyGen queues + renders ~1-2s of video/sec
