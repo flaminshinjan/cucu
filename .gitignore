@@ -1,0 +1,14 @@
+node_modules
+.next
+.vercel
+.env
+.env.local
+.env*.local
+*.log
+.DS_Store
+data/runs/*.json
+!data/runs/.gitkeep
+data/cache/*
+!data/cache/.gitkeep
+public/generated/*
+!public/generated/.gitkeep

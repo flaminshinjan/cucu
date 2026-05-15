@@ -1,0 +1,159 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -------- Light mode (default) -------- */
+@layer base {
+  :root {
+    --background: 40 33% 97%;        /* warm cream */
+    --foreground: 30 12% 10%;        /* near-black ink */
+
+    --card: 0 0% 100%;
+    --card-foreground: 30 12% 10%;
+
+    --primary: 14 89% 54%;           /* signal coral */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 38 25% 92%;
+    --secondary-foreground: 30 12% 18%;
+
+    --muted: 38 22% 94%;
+    --muted-foreground: 28 6% 38%;
+
+    --accent: 38 30% 88%;
+    --accent-foreground: 30 12% 14%;
+
+    --border: 36 16% 86%;
+    --input: 36 16% 86%;
+    --ring: 14 89% 54%;
+
+    --radius: 0.9rem;
+  }
+
+  /* keep dark mode available via .dark — but we no longer default to it */
+  .dark {
+    --background: 30 10% 7%;
+    --foreground: 36 25% 92%;
+
+    --card: 30 10% 9%;
+    --card-foreground: 36 25% 92%;
+
+    --primary: 14 89% 60%;
+    --primary-foreground: 30 10% 7%;
+
+    --secondary: 30 8% 14%;
+    --secondary-foreground: 36 25% 92%;
+
+    --muted: 30 8% 12%;
+    --muted-foreground: 36 12% 60%;
+
+    --accent: 30 8% 16%;
+    --accent-foreground: 36 25% 92%;
+
+    --border: 30 8% 18%;
+    --input: 30 8% 18%;
+    --ring: 14 89% 60%;
+  }
+
+  html,
+  body {
+    height: 100%;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-feature-settings: "ss01", "cv11", "cv02";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Soft, almost paper-like backdrop */
+  body {
+    background-image:
+      radial-gradient(1100px 600px at 110% -10%, hsla(14, 89%, 60%, 0.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, hsla(38, 60%, 70%, 0.18), transparent 60%);
+  }
+
+  /* Headline display type */
+  .font-display {
+    font-feature-settings: "ss01", "ss02", "liga";
+    letter-spacing: -0.025em;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Tactile, lifted card. Replaces the dark "glass" treatment. */
+  .surface {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    box-shadow:
+      0 1px 0 0 hsla(30, 12%, 10%, 0.02),
+      0 8px 24px -16px hsla(30, 12%, 10%, 0.12);
+  }
+  .surface-tint {
+    background: linear-gradient(
+      180deg,
+      hsl(var(--card)) 0%,
+      hsla(38, 30%, 96%, 1) 100%
+    );
+    border: 1px solid hsl(var(--border));
+    box-shadow:
+      0 1px 0 0 hsla(30, 12%, 10%, 0.02),
+      0 8px 24px -16px hsla(30, 12%, 10%, 0.12);
+  }
+
+  /* Subtle dotted/paper texture overlay */
+  .paper {
+    background-image:
+      radial-gradient(hsla(30, 12%, 10%, 0.04) 1px, transparent 1px);
+    background-size: 14px 14px;
+  }
+
+  /* Tight grid backdrop for the reveal moment */
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, hsla(30, 12%, 10%, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, hsla(30, 12%, 10%, 0.05) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  /* Shimmer used during loading states */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsla(14, 89%, 54%, 0.08),
+      transparent
+    );
+    background-size: 1000px 100%;
+    animation: shimmer 2.4s linear infinite;
+  }
+
+  /* Soft glow used to mark "live" state — restrained, not flashy */
+  .focus-glow {
+    box-shadow:
+      0 0 0 1px hsla(14, 89%, 54%, 0.45),
+      0 8px 24px -8px hsla(14, 89%, 54%, 0.18);
+  }
+
+  /* Underline accent used on emphasized words */
+  .ink-underline {
+    background-image: linear-gradient(transparent 70%, hsla(14, 89%, 54%, 0.28) 70%);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+  }
+}

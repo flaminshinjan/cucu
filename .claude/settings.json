@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"GET / → %{http_code}\\\\n\" http://localhost:3000)",
+      "Bash(curl -s http://localhost:3000/api/personas)",
+      "Bash(curl -s -o /dev/null -w \"GET /api/personas → %{http_code}\\\\n\" http://localhost:3002/api/personas)",
+      "Bash(curl -s http://localhost:3002/api/personas)",
+      "Bash(curl -s -X POST http://localhost:3002/api/run -H \"content-type: application/json\" -d '{\"personaId\":\"b2b-saas-founder\"}')",
+      "Bash(python3 -c \"import json,sys;d=json.load\\(sys.stdin\\);r=d['run'];print\\('stage:',r.get\\('stage'\\)\\);print\\('research findings:',len\\(r.get\\('research',{}\\).get\\('findings',[]\\)\\) if r.get\\('research'\\) else 0\\);print\\('strategy pillars:',len\\(r.get\\('strategy',{}\\).get\\('pillars',[]\\)\\) if r.get\\('strategy'\\) else 0\\);print\\('copies:',len\\(r.get\\('copies',[]\\)\\)\\);print\\('compositions:',len\\(r.get\\('compositions',[]\\)\\)\\);print\\('assets keys:',list\\(\\(r.get\\('assets'\\) or {}\\).keys\\(\\)\\)\\)\")",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(curl -s http://localhost:3000/api/run/__TRACKED_VAR__)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s \"http://localhost:3000/\")",
+      "Bash(rm -rf /Users/shinjan/Desktop/cucu/data/runs/*.json /Users/shinjan/Desktop/cucu/public/generated/*)",
+      "Bash(curl -s \"http://localhost:3000/api/personas\")",
+      "Bash(xargs basename)",
+      "Bash(curl -s \"http://localhost:3000/api/run/r_0358ix8imp5mtupp\")",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\(0,'utf8'\\)\\);const r=d.run||{};console.log\\('stage:',r.stage\\);console.log\\('avatar:',r.assets?.avatarVideoUrl?.slice\\(0,80\\)\\);console.log\\('error:',r.error\\)\")",
+      "Bash(pkill -f \"/tmp/swap.log\")",
+      "Bash(curl -s -o /tmp/state.json -w \"HTTP %{http_code}  size %{size_download}\\\\n\" \"http://localhost:3000/api/run/r_ejh461oump5n69ft\")",
+      "Bash(curl -s -o /dev/null -w \"GET /api/personas → %{http_code}\\\\n\" http://localhost:3000/api/personas)",
+      "Bash(curl -s -o /dev/null -w \"GET / → %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(git -C /Users/shinjan/Desktop/cucu rev-parse --is-inside-work-tree)"
+    ]
+  }
+}

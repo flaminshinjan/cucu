@@ -1,0 +1,46 @@
+# Fly.io config — cucu
+# Single Next.js app (frontend + API routes) on one machine.
+# Use `fly launch --no-deploy` to claim a unique app name, then
+# `fly secrets set ANTHROPIC_API_KEY=...` and `fly deploy`.
+
+app = "cucu"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # Provider toggles — flip when keys are added via `fly secrets`
+  AVATAR_PROVIDER = "mock"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"     # Save $$ when idle
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 60
+    hard_limit = 80
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/personas"
+
+# SSE works fine over HTTP/1.1; Fly's proxy holds the connection.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Persist generated assets and run snapshots across deploys.
+# Mount this with: fly volumes create content_data --size 1 --region iad
+[[mounts]]
+  source = "content_data"
+  destination = "/app/data"
