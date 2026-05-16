@@ -6,7 +6,7 @@ import type {
   ResearchOutput,
   StrategyOutput,
 } from "../types";
-import { PLATFORMS, PLATFORM_ORDER } from "../platforms";
+import { PLATFORMS } from "../platforms";
 import { llmJSON, llmText } from "../adapters/llm";
 import { emit } from "../store";
 
@@ -17,72 +17,59 @@ const AGENT_MAP: Record<PlatformId, AgentName> = {
   x: "copywriter-x",
 };
 
+/**
+ * Single-video product: we only generate Instagram Reel copy now.
+ * Earlier we wrote for all four platforms; that was visually fun but burned
+ * Sonnet tokens, multiplied Replicate calls, and produced 3 outputs nobody saw.
+ */
+const TARGET_PLATFORM: PlatformId = "instagram";
+
 export async function runCopywriters(
   runId: string,
   persona: BrandPersona,
   research: ResearchOutput,
   strategy: StrategyOutput,
 ): Promise<PlatformCopy[]> {
-  // Fire all four in parallel — this is the visible "agents working at once" moment
-  for (const id of PLATFORM_ORDER) {
-    emit(runId, {
-      ts: Date.now(),
-      agent: AGENT_MAP[id],
-      type: "thinking",
-      message: `Drafting ${PLATFORMS[id].name} copy on hero angle…`,
-    });
-  }
-
-  // Isolate per-platform failures so one bad write can't crash the whole stage.
-  // Each writeOne is wrapped: try once, retry once with a stricter "valid JSON only"
-  // reminder, then fall back to a salvageable placeholder.
-  const drafts = await Promise.all(
-    PLATFORM_ORDER.map(async (p) => {
-      try {
-        return await writeOne(runId, persona, research, strategy, p);
-      } catch (e1) {
-        emit(runId, {
-          ts: Date.now(),
-          agent: AGENT_MAP[p],
-          type: "thinking",
-          message: `Retrying after parse error: ${truncate((e1 as Error)?.message)}`,
-        });
-        try {
-          return await writeOne(runId, persona, research, strategy, p);
-        } catch (e2) {
-          emit(runId, {
-            ts: Date.now(),
-            agent: AGENT_MAP[p],
-            type: "error",
-            message: `Copy generation failed: ${truncate((e2 as Error)?.message)}. Using fallback.`,
-          });
-          return fallbackCopy(persona, strategy, p);
-        }
-      }
-    }),
-  );
-
-  // Brand-voice consistency pass with Sonnet
   emit(runId, {
     ts: Date.now(),
-    agent: "coordinator",
+    agent: AGENT_MAP[TARGET_PLATFORM],
     type: "thinking",
-    message: "Running brand-voice consistency pass across all four platforms…",
+    message: `Drafting ${PLATFORMS[TARGET_PLATFORM].name} copy on hero angle…`,
   });
 
-  const consistent = await voiceConsistencyPass(runId, persona, drafts);
-
-  for (const c of consistent) {
+  // Same retry+fallback as before — single write, but resilient.
+  let copy: PlatformCopy;
+  try {
+    copy = await writeOne(runId, persona, research, strategy, TARGET_PLATFORM);
+  } catch (e1) {
     emit(runId, {
       ts: Date.now(),
-      agent: AGENT_MAP[c.platform],
-      type: "result",
-      message: `${PLATFORMS[c.platform].name} copy ready · ${c.meta.characterCount} chars`,
-      data: c,
+      agent: AGENT_MAP[TARGET_PLATFORM],
+      type: "thinking",
+      message: `Retrying after parse error: ${truncate((e1 as Error)?.message)}`,
     });
+    try {
+      copy = await writeOne(runId, persona, research, strategy, TARGET_PLATFORM);
+    } catch (e2) {
+      emit(runId, {
+        ts: Date.now(),
+        agent: AGENT_MAP[TARGET_PLATFORM],
+        type: "error",
+        message: `Copy generation failed: ${truncate((e2 as Error)?.message)}. Using fallback.`,
+      });
+      copy = fallbackCopy(persona, strategy, TARGET_PLATFORM);
+    }
   }
 
-  return consistent;
+  emit(runId, {
+    ts: Date.now(),
+    agent: AGENT_MAP[copy.platform],
+    type: "result",
+    message: `${PLATFORMS[copy.platform].name} copy ready · ${copy.meta.characterCount} chars`,
+    data: copy,
+  });
+
+  return [copy];
 }
 
 async function writeOne(

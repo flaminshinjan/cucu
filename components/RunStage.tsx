@@ -8,10 +8,12 @@ import {
   CheckCircle2,
   Compass,
   Film,
+  Maximize2,
   Megaphone,
   Mic2,
   PencilLine,
   Sparkles,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import type {
@@ -23,7 +25,7 @@ import type {
   StreamEvent,
 } from "@/lib/types";
 import { PLATFORMS, PLATFORM_ORDER } from "@/lib/platforms";
-import { PlatformFrame } from "@/components/PlatformFrame";
+import { MarketingComposition } from "@/components/MarketingComposition";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
@@ -102,7 +104,11 @@ export function RunStage({
   if (error) {
     return <ErrorState error={error} />;
   }
-  if (stage === "done") {
+  // Stage hits "done" before the snapshot fetch resolves, so compositions can be
+  // momentarily empty. In that window, keep showing the progress view (with the
+  // "Composing" stage chip lit) instead of dumping to IdleState.
+  const hasCompositions = (run.compositions?.length ?? 0) > 0;
+  if (stage === "done" && hasCompositions) {
     return <OutputView persona={persona} run={run} />;
   }
   return (
@@ -111,7 +117,7 @@ export function RunStage({
       run={run}
       events={events}
       liveBuffers={liveBuffers}
-      stage={stage}
+      stage={stage === "done" ? "composing" : stage}
       startedAt={startedAt}
       finishedAt={finishedAt}
     />
@@ -445,6 +451,8 @@ function StrategyCard({ hero }: { hero: string }) {
 }
 
 function CopyProgressCard({ count }: { count: number }) {
+  const ig = PLATFORMS.instagram;
+  const done = count > 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 4 }}
@@ -454,40 +462,34 @@ function CopyProgressCard({ count }: { count: number }) {
       <div className="flex items-center gap-2 mb-3">
         <Badge variant="success">Copy</Badge>
         <span className="text-[10px] text-ink-400 uppercase tracking-wider">
-          {count} of 4 platforms
+          Instagram Reel
         </span>
       </div>
-      <div className="grid grid-cols-4 gap-2">
-        {PLATFORM_ORDER.map((id, i) => {
-          const p = PLATFORMS[id];
-          const done = i < count;
-          return (
-            <div
-              key={id}
+      <div className="grid grid-cols-1 gap-2">
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 transition-all flex items-center justify-between gap-2",
+            done ? "border-ink-200 bg-cream-50" : "border-ink-100 bg-white",
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: done ? ig.brandColor : "#D1CFCB" }}
+            />
+            <span
               className={cn(
-                "rounded-lg border px-2 py-1.5 text-center transition-all",
-                done
-                  ? "border-ink-200 bg-cream-50"
-                  : "border-ink-100 bg-white",
+                "text-[12px] font-medium",
+                done ? "text-ink-800" : "text-ink-400",
               )}
             >
-              <div className="flex items-center justify-center gap-1">
-                <span
-                  className="h-1.5 w-1.5 rounded-full"
-                  style={{ background: done ? p.brandColor : "#D1CFCB" }}
-                />
-                <span
-                  className={cn(
-                    "text-[10px] font-medium",
-                    done ? "text-ink-800" : "text-ink-400",
-                  )}
-                >
-                  {p.shortName}
-                </span>
-              </div>
-            </div>
-          );
-        })}
+              Instagram Reel · 9:16
+            </span>
+          </div>
+          <span className="text-[10px] uppercase tracking-wider text-ink-400">
+            {done ? "ready" : "drafting…"}
+          </span>
+        </div>
       </div>
     </motion.div>
   );
@@ -502,24 +504,42 @@ function OutputView({
   persona: BrandPersona | null;
   run: Partial<ContentRun>;
 }) {
-  const [playingId, setPlayingId] = useState<PlatformId | null>(null);
-  const compositions = run.compositions ?? [];
-  const ordered = PLATFORM_ORDER.map((id) =>
-    compositions.find((c) => c.platform === id),
-  ).filter((c): c is NonNullable<typeof c> => !!c);
+  const [maximized, setMaximized] = useState(false);
+  const comp = (run.compositions ?? [])[0];
+  const platform = comp ? PLATFORMS[comp.platform] : null;
 
-  if (!persona || ordered.length === 0) {
+  // Close on Escape
+  useEffect(() => {
+    if (!maximized) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMaximized(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [maximized]);
+
+  if (!persona || !comp || !platform) {
     return <IdleState />;
   }
 
   return (
     <div className="flex flex-col h-full min-h-0 gap-4">
+      <MaximizedViewer
+        comp={maximized ? comp : null}
+        persona={persona}
+        run={run}
+        onClose={() => setMaximized(false)}
+      />
+
       <div className="shrink-0 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <CheckCircle2 size={13} className="text-emerald-600" />
             <span className="text-[10px] uppercase tracking-[0.18em] text-emerald-700 font-semibold">
-              Four platforms ready
+              {platform.name} ready
+            </span>
+            <span className="text-[10px] uppercase tracking-[0.12em] text-ink-400">
+              {platform.aspect}
             </span>
           </div>
           <h2 className="font-display text-3xl text-ink-800 leading-tight text-balance">
@@ -536,69 +556,148 @@ function OutputView({
             </span>
             <span className="text-ink-700 font-medium">{persona.name}</span>
             <span className="text-ink-300">·</span>
-            <span>One brand, four native formats</span>
+            <span>Marketing video, on demand</span>
           </p>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pr-1">
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 items-start pb-2">
-          {ordered.map((comp, i) => {
-            const p = PLATFORMS[comp.platform];
-            const isPlaying = playingId === comp.platform;
-            return (
-              <motion.div
-                key={comp.platform}
-                initial={{ opacity: 0, y: 16, scale: 0.96 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ delay: i * 0.08, duration: 0.5, ease: [0.2, 0.8, 0.2, 1] }}
-                className="flex flex-col gap-1.5"
-              >
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="h-1.5 w-1.5 rounded-full"
-                      style={{ background: p.brandColor }}
-                    />
-                    <span className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold">
-                      {p.name}
-                    </span>
-                  </div>
-                  <span className="text-[9px] uppercase tracking-wider text-ink-400">
-                    {p.aspect}
-                  </span>
-                </div>
-                <button
-                  onClick={() =>
-                    setPlayingId(isPlaying ? null : comp.platform)
-                  }
-                  className={cn(
-                    "rounded-xl ring-1 ring-ink-100 hover:ring-signal-400/60 transition-all",
-                    isPlaying && "ring-signal-500/80 shadow-[0_20px_40px_-16px_rgba(242,64,22,0.4)]",
-                  )}
-                >
-                  <PlatformFrame
-                    composition={comp}
-                    persona={persona}
-                    voiceAudioUrl={run.assets?.voiceAudioUrl}
-                    avatarVideoUrl={run.assets?.avatarVideoUrl}
-                    autoplay={isPlaying}
-                    compact
-                  />
-                </button>
-              </motion.div>
-            );
-          })}
-        </div>
+      {/* Centered single composition — fills the available height while keeping 9:16 aspect */}
+      <div className="flex-1 min-h-0 flex items-center justify-center">
+        <motion.div
+          initial={{ opacity: 0, y: 16, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.55, ease: [0.2, 0.8, 0.2, 1] }}
+          className="relative h-full max-h-full aspect-[9/16] rounded-2xl ring-1 ring-ink-100 hover:ring-signal-400/60 transition-shadow overflow-hidden group shadow-[0_30px_80px_-30px_rgba(30,12,10,0.3)]"
+        >
+          <MarketingComposition
+            composition={comp}
+            persona={persona}
+            voiceAudioUrl={run.assets?.voiceAudioUrl}
+            avatarVideoUrl={run.assets?.avatarVideoUrl}
+            avatarStatus={run.assets?.avatarStatus}
+            avatarStatusReason={run.assets?.avatarStatusReason}
+            aspect={platform.aspect}
+          />
+          <button
+            onClick={() => setMaximized(true)}
+            className="absolute top-3 right-3 z-30 h-9 w-9 rounded-full bg-white/95 hover:bg-white text-ink-800 flex items-center justify-center shadow-sm opacity-0 group-hover:opacity-100 transition-opacity"
+            aria-label="Open fullscreen"
+            title="Maximize"
+          >
+            <Maximize2 size={14} />
+          </button>
+        </motion.div>
       </div>
 
       <div className="shrink-0 flex items-center justify-between gap-3 text-[11px] text-ink-400">
-        <span>Click any card to play it.</span>
+        <span>Hover the video to maximize · Esc to close</span>
         <span>
-          One strategy ·{" "}
-          <span className="text-ink-700 font-medium">four native posts</span>
+          One brief ·{" "}
+          <span className="text-ink-700 font-medium">one Instagram Reel</span>
         </span>
       </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── Maximized viewer ───────────────────────── */
+
+function MaximizedViewer({
+  comp,
+  persona,
+  run,
+  onClose,
+}: {
+  comp: NonNullable<Partial<ContentRun>["compositions"]> extends Array<infer C> ? C | null : null;
+  persona: BrandPersona;
+  run: Partial<ContentRun>;
+  onClose: () => void;
+}) {
+  return (
+    <AnimatePresence>
+      {comp && (
+        <motion.div
+          className="fixed inset-0 z-50 bg-ink-900/85 backdrop-blur-md flex flex-col items-stretch"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          {/* Header */}
+          <div className="shrink-0 flex items-center justify-between px-6 py-4 text-white">
+            <div className="flex items-center gap-3 min-w-0">
+              <span
+                className="h-7 w-7 rounded-md flex items-center justify-center text-[16px] ring-1 ring-white/20"
+                style={{
+                  background: `linear-gradient(135deg, ${persona.primaryColor}38, ${persona.accentColor}50)`,
+                }}
+              >
+                {persona.emoji}
+              </span>
+              <div className="min-w-0">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-white/60 font-semibold">
+                  {PLATFORMS[comp.platform].name} · {PLATFORMS[comp.platform].aspect}
+                </div>
+                <div className="font-display text-xl text-white leading-tight truncate">
+                  {persona.name}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="h-9 w-9 rounded-full bg-white/15 hover:bg-white/25 text-white flex items-center justify-center transition-colors"
+              aria-label="Close"
+            >
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Stage — composition centered, taking max viewport size */}
+          <div
+            className="flex-1 min-h-0 flex items-center justify-center px-6 pb-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <MaximizedFrame comp={comp} persona={persona} run={run} />
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/**
+ * Wraps MarketingComposition with a sizing strategy that fills the available
+ * viewport while preserving the platform's native aspect ratio.
+ */
+function MaximizedFrame({
+  comp,
+  persona,
+  run,
+}: {
+  comp: NonNullable<NonNullable<Partial<ContentRun>["compositions"]>[number]>;
+  persona: BrandPersona;
+  run: Partial<ContentRun>;
+}) {
+  const aspect = PLATFORMS[comp.platform].aspect;
+  // 9:16 → tall, fill height; 16:9 → wide, fill width; 1:1 → fit both
+  const sizing =
+    aspect === "9:16"
+      ? "h-[88vh] w-auto aspect-[9/16]"
+      : aspect === "16:9"
+        ? "w-[88vw] max-w-5xl aspect-video"
+        : "w-[80vmin] h-[80vmin] aspect-square";
+  return (
+    <div className={cn("rounded-2xl overflow-hidden shadow-[0_30px_80px_-20px_rgba(0,0,0,0.6)]", sizing)}>
+      <MarketingComposition
+        composition={comp}
+        persona={persona}
+        voiceAudioUrl={run.assets?.voiceAudioUrl}
+        avatarVideoUrl={run.assets?.avatarVideoUrl}
+        avatarStatus={run.assets?.avatarStatus}
+        avatarStatusReason={run.assets?.avatarStatusReason}
+        aspect={aspect}
+        autoplay
+      />
     </div>
   );
 }

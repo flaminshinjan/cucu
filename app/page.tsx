@@ -7,7 +7,9 @@ import { Card } from "@/components/ui/card";
 import { useRun } from "@/components/useRun";
 import { useStudioConfig } from "@/components/useStudioConfig";
 import { useChatHistory } from "@/components/useChatHistory";
+import { useRunHistory } from "@/components/useRunHistory";
 import { cn } from "@/lib/utils";
+import type { ContentRun } from "@/lib/types";
 
 interface Caps {
   hasAnthropic: boolean;
@@ -26,8 +28,9 @@ interface Example {
 export default function Home() {
   const [examples, setExamples] = useState<Example[]>([]);
   const [capabilities, setCapabilities] = useState<Caps | null>(null);
-  const { state, start, reset: _reset } = useRun();
+  const { state, start, reset: _reset, loadFromHistory } = useRun();
   const { config: studioConfig, setConfig: setStudioConfig } = useStudioConfig();
+  const { history, saveRun, removeRun, clear: clearHistory } = useRunHistory();
   void _reset;
 
   useEffect(() => {
@@ -43,6 +46,27 @@ export default function Home() {
   const persona = state.run.persona ?? null;
   const running = state.runId !== null && state.stage !== "done" && state.stage !== "error";
   const hasRun = state.runId !== null;
+
+  // Auto-save a completed run to localStorage once compositions land.
+  // We save whenever stage hits "done" AND we have at least one composition.
+  // The hook dedupes by run.id so re-saving when avatar hot-swaps just updates the entry.
+  useEffect(() => {
+    if (
+      state.runId &&
+      state.stage === "done" &&
+      (state.run.compositions?.length ?? 0) > 0 &&
+      state.run.persona
+    ) {
+      saveRun(state.run as ContentRun);
+    }
+  }, [
+    state.runId,
+    state.stage,
+    state.run.compositions?.length,
+    state.run.assets?.avatarVideoUrl,
+    saveRun,
+    state.run,
+  ]);
 
   const { messages, appendUser } = useChatHistory({
     runId: state.runId,
@@ -83,6 +107,10 @@ export default function Home() {
             capabilities={capabilities}
             studioConfig={studioConfig}
             onStudioChange={setStudioConfig}
+            history={history}
+            onLoadFromHistory={loadFromHistory}
+            onRemoveFromHistory={removeRun}
+            onClearHistory={clearHistory}
           />
         </Card>
 

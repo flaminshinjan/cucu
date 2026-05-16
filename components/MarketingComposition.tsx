@@ -2,37 +2,42 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Pause, Play, Volume2, VolumeX } from "lucide-react";
-import type { BrandPersona, PlatformComposition } from "@/lib/types";
+import { AlertCircle, Loader2, Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
+import type { AvatarRenderStatus, BrandPersona, PlatformComposition } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface Props {
   composition: PlatformComposition;
   persona: BrandPersona;
   voiceAudioUrl?: string;
-  /** Real http URL → uses <video>; client://avatar → uses mock SVG */
+  /** Real http URL → uses <video>; client://avatar → uses clean brand emblem */
   avatarVideoUrl?: string;
+  /** Status of the background HeyGen render — drives the presenter-side loader */
+  avatarStatus?: AvatarRenderStatus;
+  avatarStatusReason?: string;
   aspect: "9:16" | "16:9" | "1:1";
   autoplay?: boolean;
 }
 
 /**
- * Marketing-video-style split composition:
- *   - One half: animated content (hero angle, brand mark, live caption highlight)
- *   - Other half: presenter (real HeyGen video or mock SVG avatar)
+ * Marketing-video split composition.
+ *  - One half: animated content (b-roll Ken Burns + brand mark + word-reveal hook + CTA).
+ *  - Other half: presenter (real HeyGen video, or a clean brand-emblem fallback).
  *
- * Layout adapts per aspect:
- *   - 16:9 / 1:1 → horizontal split (content left, presenter right)
- *   - 9:16        → vertical split  (content top,  presenter bottom)
+ * Layout per aspect:
+ *  - 16:9 / 1:1 → horizontal split (content left, presenter right)
+ *  - 9:16       → vertical split  (content top,  presenter bottom)
  *
- * Playback is self-contained: one audio element drives the timer; the
- * video tag stays in sync via the rAF time tracker.
+ * Playback: one rAF time-tracker drives everything. Click-to-seek on the
+ * progress bar. Replay is supported by clicking play once the run ends.
  */
 export function MarketingComposition({
   composition,
   persona,
   voiceAudioUrl,
   avatarVideoUrl,
+  avatarStatus,
+  avatarStatusReason,
   aspect,
   autoplay = false,
 }: Props) {
@@ -40,10 +45,11 @@ export function MarketingComposition({
   const isMockAvatar = !avatarVideoUrl || avatarVideoUrl.startsWith("client://avatar");
   const useBrowserSpeech =
     !voiceAudioUrl || voiceAudioUrl.startsWith("client://speech");
+
   const speechText = useMemo(() => {
     if (!voiceAudioUrl || !voiceAudioUrl.startsWith("client://speech")) return "";
-    const params = voiceAudioUrl.split("?")[1] ?? "";
-    const t = new URLSearchParams(params).get("text");
+    const qs = voiceAudioUrl.split("?")[1] ?? "";
+    const t = new URLSearchParams(qs).get("text");
     return t ? decodeURIComponent(t) : "";
   }, [voiceAudioUrl]);
 
@@ -56,18 +62,19 @@ export function MarketingComposition({
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const utterRef = useRef<SpeechSynthesisUtterance | null>(null);
   const rafRef = useRef<number | null>(null);
   const startedAtRef = useRef<number | null>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
 
   const currentTime = progress * totalDuration;
   const activeCaption = composition.captions.find(
     (c) => currentTime >= c.start && currentTime <= c.end,
   );
+  const ended = progress >= 0.999;
 
-  // ───── playback control ─────
+  /* ──────── playback control ──────── */
 
-  function stopEverything() {
+  function stopAll() {
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -88,22 +95,40 @@ export function MarketingComposition({
     setProgress(p);
     if (t >= totalDuration) {
       setPlaying(false);
-      setProgress(1);
+      startedAtRef.current = null;
+      // stop video/audio at the end
+      if (audioRef.current) audioRef.current.pause();
+      if (videoRef.current) videoRef.current.pause();
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
       return;
     }
     rafRef.current = requestAnimationFrame(tick);
   }
 
-  function play() {
+  function play(fromStart = false) {
+    // If the playback already ended, reset to 0 for a clean replay.
+    const startProgress = fromStart || ended ? 0 : progress;
+    setProgress(startProgress);
     setPlaying(true);
-    startedAtRef.current = Date.now() - progress * totalDuration * 1000;
+    startedAtRef.current = Date.now() - startProgress * totalDuration * 1000;
 
     if (!isMockAvatar && videoRef.current) {
       videoRef.current.muted = muted;
+      try {
+        videoRef.current.currentTime = startProgress * totalDuration;
+      } catch {
+        /* not seekable yet */
+      }
       void videoRef.current.play();
     } else if (voiceAudioUrl && !useBrowserSpeech && audioRef.current) {
       audioRef.current.muted = muted;
-      audioRef.current.currentTime = progress * totalDuration;
+      try {
+        audioRef.current.currentTime = startProgress * totalDuration;
+      } catch {
+        /* not seekable yet */
+      }
       void audioRef.current.play();
     } else if (useBrowserSpeech && speechText && typeof window !== "undefined") {
       const synth = window.speechSynthesis;
@@ -112,7 +137,6 @@ export function MarketingComposition({
       u.rate = 1.02;
       u.pitch = 1;
       u.volume = muted ? 0 : 1;
-      // Try to pick a gender-matching voice
       const voices = synth.getVoices();
       const wanted = persona.voiceGender;
       if (wanted !== "neutral" && voices.length) {
@@ -121,14 +145,17 @@ export function MarketingComposition({
             ? ["female", "samantha", "victoria", "karen", "tessa", "fiona", "ava", "zoe", "joanna", "emma"]
             : ["male", "alex", "daniel", "fred", "tom", "diego", "rishi", "matthew"];
         const pick =
-          voices.find((v) => v.lang.toLowerCase().startsWith("en") && hints.some((h) => v.name.toLowerCase().includes(h))) ??
-          voices.find((v) => hints.some((h) => v.name.toLowerCase().includes(h)));
+          voices.find(
+            (v) =>
+              v.lang.toLowerCase().startsWith("en") &&
+              hints.some((h) => v.name.toLowerCase().includes(h)),
+          ) ?? voices.find((v) => hints.some((h) => v.name.toLowerCase().includes(h)));
         if (pick) u.voice = pick;
       }
-      utterRef.current = u;
       u.onend = () => {
         setPlaying(false);
         setProgress(1);
+        startedAtRef.current = null;
       };
       synth.speak(u);
     }
@@ -137,27 +164,58 @@ export function MarketingComposition({
   }
 
   function pause() {
-    stopEverything();
+    stopAll();
+  }
+
+  function seekToFraction(frac: number) {
+    const clamped = Math.max(0, Math.min(1, frac));
+    setProgress(clamped);
+    const wasPlaying = playing;
+    stopAll();
+    // Update the underlying media position even when paused, so the next play resumes from the right place.
+    if (!isMockAvatar && videoRef.current) {
+      try {
+        videoRef.current.currentTime = clamped * totalDuration;
+      } catch {
+        /* swallow */
+      }
+    }
+    if (voiceAudioUrl && !useBrowserSpeech && audioRef.current) {
+      try {
+        audioRef.current.currentTime = clamped * totalDuration;
+      } catch {
+        /* swallow */
+      }
+    }
+    if (wasPlaying) play();
+  }
+
+  function onScrubClick(e: React.MouseEvent<HTMLDivElement>) {
+    const el = progressBarRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const frac = (e.clientX - rect.left) / rect.width;
+    seekToFraction(frac);
   }
 
   useEffect(() => {
     if (autoplay) {
-      const t = setTimeout(() => play(), 300);
+      const t = setTimeout(() => play(true), 200);
       return () => clearTimeout(t);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoplay, avatarVideoUrl, voiceAudioUrl]);
+  }, [autoplay]);
 
-  // Reset on URL change (e.g. avatar hot-swap)
+  // Reset on avatar URL change (e.g. hot-swap from mock to real HeyGen video)
   useEffect(() => {
-    stopEverything();
+    stopAll();
     setProgress(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [avatarVideoUrl]);
 
-  useEffect(() => stopEverything, []);
+  useEffect(() => stopAll, []);
 
-  // ───── render ─────
+  /* ──────── render ──────── */
 
   const containerClass =
     aspect === "9:16"
@@ -169,20 +227,20 @@ export function MarketingComposition({
   return (
     <div
       className={cn(
-        "relative w-full overflow-hidden rounded-xl border border-ink-100",
+        "relative w-full overflow-hidden rounded-xl",
         containerClass,
       )}
       style={{
-        background: `linear-gradient(135deg, ${persona.primaryColor}10 0%, ${persona.accentColor}1A 100%), #FBFAF7`,
+        background: `linear-gradient(135deg, ${persona.primaryColor}0F 0%, ${persona.accentColor}1F 100%), #FBFAF7`,
       }}
     >
-      {/* Soft brand orbs in the background */}
+      {/* Soft brand orbs */}
       <div
-        className="absolute -top-12 -left-12 h-48 w-48 rounded-full opacity-35 blur-3xl"
+        className="absolute -top-12 -left-12 h-48 w-48 rounded-full opacity-30 blur-3xl pointer-events-none"
         style={{ background: persona.primaryColor }}
       />
       <div
-        className="absolute -bottom-12 -right-12 h-56 w-56 rounded-full opacity-25 blur-3xl"
+        className="absolute -bottom-12 -right-12 h-56 w-56 rounded-full opacity-25 blur-3xl pointer-events-none"
         style={{ background: persona.accentColor }}
       />
 
@@ -193,17 +251,14 @@ export function MarketingComposition({
           layout === "horizontal" ? "flex" : "flex flex-col",
         )}
       >
-        {/* Content side */}
         <ContentSide
           composition={composition}
           persona={persona}
           currentTime={currentTime}
           totalDuration={totalDuration}
-          activeCaption={activeCaption}
           layout={layout}
         />
 
-        {/* Presenter side */}
         <PresenterSide
           persona={persona}
           isMockAvatar={isMockAvatar}
@@ -211,14 +266,17 @@ export function MarketingComposition({
           videoRef={videoRef}
           playing={playing}
           layout={layout}
+          avatarStatus={avatarStatus}
+          avatarStatusReason={avatarStatusReason}
           onEnded={() => {
             setPlaying(false);
             setProgress(1);
+            startedAtRef.current = null;
           }}
         />
       </div>
 
-      {/* Audio (only when we have a real audio URL — video has its own audio) */}
+      {/* Audio element when we have a real TTS URL (not browser speech) */}
       {voiceAudioUrl && !useBrowserSpeech && (
         <audio
           ref={audioRef}
@@ -226,11 +284,12 @@ export function MarketingComposition({
           onEnded={() => {
             setPlaying(false);
             setProgress(1);
+            startedAtRef.current = null;
           }}
         />
       )}
 
-      {/* Captions — overlay across the bottom of the whole frame */}
+      {/* Captions */}
       <AnimatePresence>
         {activeCaption && (
           <motion.div
@@ -239,8 +298,8 @@ export function MarketingComposition({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             className={cn(
-              "absolute left-1/2 -translate-x-1/2 z-10 px-3 max-w-[88%]",
-              layout === "vertical" ? "bottom-14" : "bottom-12",
+              "absolute left-1/2 -translate-x-1/2 z-10 px-3 max-w-[90%] pointer-events-none",
+              layout === "vertical" ? "bottom-16" : "bottom-14",
             )}
           >
             <span className="inline-block text-center bg-ink-800/85 text-white text-[12px] md:text-[13px] px-3 py-1.5 rounded-md leading-snug font-medium text-balance backdrop-blur-sm">
@@ -251,23 +310,42 @@ export function MarketingComposition({
       </AnimatePresence>
 
       {/* Progress + controls */}
-      <div className="absolute left-0 right-0 bottom-0 z-10 px-3 pb-2.5 pt-6 bg-gradient-to-t from-ink-900/35 to-transparent">
-        <div className="h-0.5 bg-white/30 rounded-full overflow-hidden mb-2">
+      <div className="absolute left-0 right-0 bottom-0 z-20 px-3 pb-2.5 pt-6 bg-gradient-to-t from-ink-900/35 to-transparent">
+        <div
+          ref={progressBarRef}
+          onClick={onScrubClick}
+          className="h-1.5 bg-white/30 rounded-full overflow-hidden mb-2 cursor-pointer relative group"
+          role="slider"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress * 100)}
+        >
           <div
-            className="h-full transition-[width] duration-100"
+            className="h-full transition-[width] duration-100 pointer-events-none"
             style={{
               width: `${progress * 100}%`,
               background: persona.primaryColor,
             }}
           />
+          {/* Scrubber handle */}
+          <div
+            className="absolute top-1/2 -translate-y-1/2 h-3 w-3 rounded-full bg-white shadow-sm opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+            style={{ left: `calc(${progress * 100}% - 6px)` }}
+          />
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => (playing ? pause() : play())}
+            onClick={() => (playing ? pause() : play(ended))}
             className="h-7 w-7 rounded-full bg-white/95 hover:bg-white text-ink-800 flex items-center justify-center transition-colors shadow-sm"
-            aria-label={playing ? "Pause" : "Play"}
+            aria-label={playing ? "Pause" : ended ? "Replay" : "Play"}
           >
-            {playing ? <Pause size={12} /> : <Play size={12} className="ml-0.5" />}
+            {playing ? (
+              <Pause size={12} />
+            ) : ended ? (
+              <RotateCcw size={11} />
+            ) : (
+              <Play size={12} className="ml-0.5" />
+            )}
           </button>
           <button
             onClick={() => setMuted((m) => !m)}
@@ -287,11 +365,11 @@ export function MarketingComposition({
 
 function fmt(s: number): string {
   const m = Math.floor(s / 60);
-  const r = Math.round(s % 60);
+  const r = Math.floor(s % 60);
   return `${m}:${r.toString().padStart(2, "0")}`;
 }
 
-/* ───────────────────────── Content side ───────────────────────── */
+/* ──────────────────────────── Content side ──────────────────────────── */
 
 function ContentSide({
   composition,
@@ -304,74 +382,85 @@ function ContentSide({
   persona: BrandPersona;
   currentTime: number;
   totalDuration: number;
-  activeCaption: PlatformComposition["captions"][number] | undefined;
   layout: "horizontal" | "vertical";
 }) {
-  // Word-by-word highlight on the hook driven by currentTime
+  // Word-by-word color reveal on the hook driven by currentTime.
+  // The hook plays through ~40% of the spoken duration.
   const hookWords = composition.copy.hook.split(/\s+/);
-  const hookProgress = totalDuration > 0 ? currentTime / Math.max(2, totalDuration * 0.4) : 0;
-  // Show CTA after the first 60% of the video
+  const hookProgress =
+    totalDuration > 0 ? currentTime / Math.max(2, totalDuration * 0.4) : 0;
   const showCta = currentTime > totalDuration * 0.65;
 
   // Pick the b-roll image active at currentTime
-  const activeBRoll = composition.bRoll?.find(
-    (b) => currentTime >= b.startAt && currentTime <= b.endAt,
-  ) ?? composition.bRoll?.[0];
-  const bRollIndex = activeBRoll
-    ? (composition.bRoll ?? []).indexOf(activeBRoll)
-    : -1;
+  const bRoll = composition.bRoll ?? [];
+  const activeBRoll =
+    bRoll.find((b) => currentTime >= b.startAt && currentTime <= b.endAt) ??
+    bRoll[Math.floor((currentTime / totalDuration) * bRoll.length)] ??
+    bRoll[0];
+  const bRollIndex = activeBRoll ? bRoll.indexOf(activeBRoll) : -1;
 
   return (
     <div
       className={cn(
         "relative flex flex-col justify-between overflow-hidden",
-        layout === "horizontal" ? "w-1/2 h-full" : "w-full h-[58%]",
+        layout === "horizontal" ? "w-1/2 h-full" : "w-full h-1/2",
         "px-4 md:px-5 py-4",
       )}
     >
-      {/* B-roll backdrop — Ken Burns animated, crossfading between beats */}
-      {composition.bRoll && composition.bRoll.length > 0 && (
+      {/* B-roll backdrop — Ken Burns crossfade between beats */}
+      {bRoll.length > 0 && activeBRoll && (
         <AnimatePresence mode="popLayout">
-          {activeBRoll && (
-            <motion.div
-              key={`bg-${bRollIndex}`}
-              className="absolute inset-0 z-0"
-              initial={{ opacity: 0, scale: 1.06 }}
-              animate={{
-                opacity: 1,
-                scale: 1.16,
-                transition: {
-                  opacity: { duration: 0.6 },
-                  scale: { duration: Math.max(4, (activeBRoll.endAt - activeBRoll.startAt) * 1.5), ease: "linear" },
+          <motion.div
+            key={`bg-${bRollIndex}`}
+            className="absolute inset-0 z-0"
+            initial={{ opacity: 0, scale: 1.04 }}
+            animate={{
+              opacity: 1,
+              scale: 1.14,
+              transition: {
+                opacity: { duration: 0.55 },
+                scale: {
+                  duration: Math.max(4, (activeBRoll.endAt - activeBRoll.startAt) * 1.5),
+                  ease: "linear",
                 },
+              },
+            }}
+            exit={{ opacity: 0, transition: { duration: 0.45 } }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={activeBRoll.url}
+              alt=""
+              className="absolute inset-0 w-full h-full object-cover"
+              // A small blur helps mask any garbled pseudo-text Flux sometimes
+              // bakes into the image without killing the visual.
+              style={{ filter: "saturate(1.02) contrast(1.02) blur(1.2px)" }}
+            />
+            {/* Cream wash — tuned to keep the photo visible but mute baked-in artifacts */}
+            <div
+              className="absolute inset-0"
+              style={{
+                background:
+                  "linear-gradient(180deg, rgba(251,250,247,0.65) 0%, rgba(251,250,247,0.45) 50%, rgba(251,250,247,0.75) 100%)",
               }}
-              exit={{ opacity: 0, transition: { duration: 0.5 } }}
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={activeBRoll.url}
-                alt=""
-                className="absolute inset-0 w-full h-full object-cover"
-                style={{ filter: "saturate(0.92) contrast(0.96)" }}
-              />
-              {/* Cream wash so text stays legible */}
-              <div
-                className="absolute inset-0"
-                style={{
-                  background: `linear-gradient(180deg, rgba(251,250,247,0.84) 0%, rgba(251,250,247,0.72) 60%, rgba(251,250,247,0.88) 100%)`,
-                }}
-              />
-            </motion.div>
-          )}
+            />
+            {/* Subtle brand-color tint */}
+            <div
+              className="absolute inset-0 mix-blend-multiply"
+              style={{
+                background: `linear-gradient(135deg, ${persona.primaryColor}14 0%, transparent 60%)`,
+              }}
+            />
+          </motion.div>
         </AnimatePresence>
       )}
 
       {/* Brand mark */}
       <div className="flex items-center gap-2 z-[1]">
         <div
-          className="h-7 w-7 rounded-md flex items-center justify-center text-[14px] ring-1 ring-ink-100 shadow-sm"
+          className="h-7 w-7 rounded-md flex items-center justify-center text-[14px] ring-1 ring-ink-100/80 shadow-sm bg-white"
           style={{
-            background: `linear-gradient(135deg, ${persona.primaryColor}28, ${persona.accentColor}40)`,
+            background: `linear-gradient(135deg, ${persona.primaryColor}26, ${persona.accentColor}3D)`,
           }}
         >
           {persona.emoji}
@@ -380,23 +469,18 @@ function ContentSide({
           <div className="text-[11px] font-semibold text-ink-800 leading-none truncate">
             {persona.name}
           </div>
-          <div className="text-[9px] uppercase tracking-[0.16em] text-ink-400 mt-0.5">
+          <div className="text-[9px] uppercase tracking-[0.16em] text-ink-500 mt-0.5">
             {persona.industry.split("—")[0].trim().slice(0, 28)}
           </div>
         </div>
       </div>
 
-      {/* Hero / hook with word reveal */}
-      <div
-        className={cn(
-          "z-[1] relative",
-          layout === "vertical" ? "text-center" : "text-left",
-        )}
-      >
+      {/* Hero hook + scaling underline */}
+      <div className={cn("z-[1] relative", layout === "vertical" ? "text-center" : "text-left")}>
         <p
           className={cn(
             "font-display leading-[1.05] text-balance",
-            layout === "horizontal" ? "text-[22px] md:text-[28px]" : "text-[24px]",
+            layout === "horizontal" ? "text-[22px] md:text-[26px]" : "text-[22px]",
           )}
         >
           {hookWords.map((w, i) => {
@@ -407,7 +491,7 @@ function ContentSide({
                 key={i}
                 className={cn(
                   "transition-colors duration-300",
-                  lit ? "text-ink-800" : "text-ink-400",
+                  lit ? "text-ink-800" : "text-ink-500/70",
                 )}
               >
                 {w}{" "}
@@ -419,14 +503,14 @@ function ContentSide({
           className="mt-2 h-[3px] rounded-full origin-left transition-transform duration-200"
           style={{
             background: persona.primaryColor,
-            transform: `scaleX(${Math.min(1, currentTime / totalDuration)})`,
+            transform: `scaleX(${Math.min(1, currentTime / Math.max(1, totalDuration))})`,
             width: layout === "horizontal" ? "60%" : "40%",
             margin: layout === "vertical" ? "8px auto 0" : undefined,
           }}
         />
       </div>
 
-      {/* CTA card — appears late in the video */}
+      {/* CTA — appears in the last third */}
       <div className="z-[1] min-h-[44px]">
         <AnimatePresence>
           {showCta && (
@@ -457,7 +541,7 @@ function ContentSide({
   );
 }
 
-/* ───────────────────────── Presenter side ───────────────────────── */
+/* ──────────────────────────── Presenter side ──────────────────────────── */
 
 function PresenterSide({
   persona,
@@ -466,6 +550,8 @@ function PresenterSide({
   videoRef,
   playing,
   layout,
+  avatarStatus,
+  avatarStatusReason,
   onEnded,
 }: {
   persona: BrandPersona;
@@ -474,181 +560,160 @@ function PresenterSide({
   videoRef: React.RefObject<HTMLVideoElement>;
   playing: boolean;
   layout: "horizontal" | "vertical";
+  avatarStatus?: AvatarRenderStatus;
+  avatarStatusReason?: string;
   onEnded: () => void;
 }) {
   return (
     <div
       className={cn(
-        "relative overflow-hidden",
-        layout === "horizontal" ? "w-1/2 h-full" : "w-full h-[42%]",
+        "relative overflow-hidden bg-ink-800",
+        layout === "horizontal" ? "w-1/2 h-full" : "w-full h-1/2",
       )}
     >
-      {/* Brand-colored backdrop behind the avatar */}
-      <div
-        className="absolute inset-0"
-        style={{
-          background: `radial-gradient(circle at 50% 100%, ${persona.primaryColor}30 0%, ${persona.primaryColor}08 50%, transparent 100%)`,
-        }}
-      />
+      {/* Real video — fills the whole presenter side edge-to-edge */}
+      {!isMockAvatar && videoUrl && (
+        <video
+          ref={videoRef}
+          src={videoUrl}
+          className="absolute inset-0 w-full h-full object-cover"
+          playsInline
+          preload="metadata"
+          onEnded={onEnded}
+        />
+      )}
 
-      {/* Soft framing card */}
-      <div className="absolute inset-3 md:inset-4 rounded-xl overflow-hidden shadow-[0_18px_40px_-18px_rgba(30,12,10,0.25)] bg-ink-800">
-        {/* Real HeyGen video */}
-        {!isMockAvatar && videoUrl && (
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            className="absolute inset-0 w-full h-full object-cover"
-            playsInline
-            onEnded={onEnded}
-          />
-        )}
-
-        {/* Mock SVG avatar */}
-        {isMockAvatar && <MockAvatar persona={persona} talking={playing} />}
-
-        {/* "AI Avatar" badge */}
-        <div className="absolute top-2 left-2 z-10 text-[9px] uppercase tracking-widest font-semibold text-white/85 bg-black/40 backdrop-blur px-2 py-0.5 rounded-full border border-white/15">
-          AI Avatar
-        </div>
-      </div>
+      {/* Clean brand-emblem fallback (no cartoon, no hardcoded text) */}
+      {isMockAvatar && (
+        <BrandEmblem
+          persona={persona}
+          playing={playing}
+          avatarStatus={avatarStatus}
+          avatarStatusReason={avatarStatusReason}
+        />
+      )}
     </div>
   );
 }
 
-/* ───────────────────────── Mock avatar SVG ───────────────────────── */
+/* ──────────────────────────── Brand emblem (avatar fallback) ──────────────────────────── */
 
-function MockAvatar({
+function BrandEmblem({
   persona,
-  talking,
+  playing,
+  avatarStatus,
+  avatarStatusReason,
 }: {
   persona: BrandPersona;
-  talking: boolean;
+  playing: boolean;
+  avatarStatus?: AvatarRenderStatus;
+  avatarStatusReason?: string;
 }) {
   const pc = persona.primaryColor;
   const ac = persona.accentColor;
-  const isFemale = (persona.voiceGender ?? "female") === "female";
-
+  const isRendering = avatarStatus === "rendering";
+  const isFailed = avatarStatus === "failed";
   return (
     <div className="absolute inset-0">
+      {/* Layered radial glow */}
       <div
         className="absolute inset-0"
         style={{
-          background: `radial-gradient(140% 80% at 50% 0%, ${pc}33 0%, ${pc}11 35%, transparent 70%), linear-gradient(180deg, #0a0e14, #0a0e14)`,
+          background: `radial-gradient(80% 80% at 50% 35%, ${pc}55 0%, ${pc}22 35%, transparent 75%), linear-gradient(180deg, #0a0e14 0%, #161313 100%)`,
         }}
       />
       <div
-        className="absolute inset-0 opacity-60"
+        className="absolute inset-0 opacity-50"
         style={{
-          background: `radial-gradient(45% 45% at 28% 32%, ${ac}55, transparent 75%)`,
+          background: `radial-gradient(30% 30% at 30% 30%, ${ac}66, transparent 80%)`,
         }}
       />
 
-      <svg
-        className="absolute inset-0 m-auto h-[88%] w-auto"
-        viewBox="0 0 200 280"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <defs>
-          <linearGradient id="skin-mc" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="#f4d4b6" />
-            <stop offset="1" stopColor="#d8a87f" />
-          </linearGradient>
-          <linearGradient id="shirt-mc" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor={pc} />
-            <stop offset="1" stopColor={ac} stopOpacity="0.6" />
-          </linearGradient>
-        </defs>
-
-        <path
-          d="M30 280 C 40 220 70 195 100 195 C 130 195 160 220 170 280 Z"
-          fill="url(#shirt-mc)"
-        />
-        <rect x="88" y="170" width="24" height="30" rx="6" fill="url(#skin-mc)" />
-        <ellipse cx="100" cy="120" rx="42" ry="50" fill="url(#skin-mc)" />
-
-        {isFemale ? (
-          <>
-            <path
-              d="M52 100 C 48 150 52 200 60 240 C 70 230 84 220 95 215 C 90 180 90 130 100 90 C 110 130 110 180 105 215 C 116 220 130 230 140 240 C 148 200 152 150 148 100 C 145 70 125 56 100 56 C 75 56 55 70 52 100 Z"
-              fill="#3a2a22"
-            />
-            <path
-              d="M60 100 C 62 78 84 64 100 64 C 122 64 142 80 144 104 C 138 92 122 86 100 90 C 80 92 66 96 60 100 Z"
-              fill="#2d1f18"
-            />
-          </>
-        ) : (
-          <path
-            d="M58 110 C 58 70 82 60 100 60 C 130 60 145 82 142 110 C 138 95 124 90 100 92 C 78 94 64 100 58 110 Z"
-            fill="#2a1f1a"
-          />
-        )}
-
-        <ellipse cx="86" cy="118" rx="3" ry="3.5" fill="#1a1a1a" />
-        <ellipse cx="114" cy="118" rx="3" ry="3.5" fill="#1a1a1a" />
-        <ellipse cx="87" cy="117" rx="1" ry="1" fill="#fff" />
-        <ellipse cx="115" cy="117" rx="1" ry="1" fill="#fff" />
-
-        <path
-          d="M78 108 Q 86 104 94 108"
-          stroke="#2a1f1a"
-          strokeWidth={isFemale ? "1.4" : "2"}
-          strokeLinecap="round"
-          fill="none"
-        />
-        <path
-          d="M106 108 Q 114 104 122 108"
-          stroke="#2a1f1a"
-          strokeWidth={isFemale ? "1.4" : "2"}
-          strokeLinecap="round"
-          fill="none"
-        />
-
-        <path
-          d="M100 124 Q 102 133 98 138 Q 102 140 104 138"
-          stroke="#a87456"
-          strokeWidth="1.2"
-          fill="none"
-          strokeLinecap="round"
-        />
-
-        <g transform="translate(100 148)">
-          <ellipse
-            cx="0"
-            cy="0"
-            rx="9"
-            ry={talking ? 4 : 1.5}
-            fill={isFemale ? "#c44a5a" : "#5a2f2f"}
-            style={{
-              transition: "all 90ms ease-out",
-              animation: talking ? "mc-mouth-talk 360ms infinite" : "none",
-            }}
-          />
-        </g>
-
-        {isFemale && (
-          <>
-            <ellipse cx="76" cy="138" rx="6" ry="3" fill="#e89090" opacity="0.35" />
-            <ellipse cx="124" cy="138" rx="6" ry="3" fill="#e89090" opacity="0.35" />
-          </>
-        )}
-      </svg>
-
-      {talking && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div className="h-40 w-40 rounded-full border border-white/10 animate-pulse-ring" />
+      {/* Top-left status pill — loader / failed / ready */}
+      {avatarStatus && avatarStatus !== "ready" && (
+        <div className="absolute top-2 left-2 right-2 z-20 flex">
+          <div
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] font-semibold backdrop-blur-sm border max-w-full",
+              isRendering &&
+                "bg-white/15 border-white/20 text-white",
+              isFailed &&
+                "bg-amber-500/20 border-amber-200/40 text-amber-100",
+              avatarStatus === "unavailable" &&
+                "bg-white/10 border-white/15 text-white/70",
+            )}
+            title={avatarStatusReason}
+          >
+            {isRendering && <Loader2 size={10} className="animate-spin" />}
+            {isFailed && <AlertCircle size={10} />}
+            <span className="truncate">
+              {isRendering
+                ? "Rendering avatar"
+                : isFailed
+                  ? "HeyGen credits needed"
+                  : "Brand emblem"}
+            </span>
+          </div>
         </div>
       )}
 
+      {/* Pulsing rings while talking */}
+      {playing && (
+        <>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div className="h-44 w-44 rounded-full border border-white/12 animate-pulse-ring" />
+          </div>
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+            <div
+              className="h-36 w-36 rounded-full border animate-pulse-ring"
+              style={{ borderColor: `${pc}55`, animationDelay: "300ms" }}
+            />
+          </div>
+        </>
+      )}
+
+      {/* Brand wordmark + emoji emblem */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-4">
+        <div
+          className="h-20 w-20 md:h-24 md:w-24 rounded-full flex items-center justify-center text-3xl md:text-4xl shadow-[0_20px_40px_-12px_rgba(0,0,0,0.6)] ring-1 ring-white/15"
+          style={{
+            background: `linear-gradient(135deg, ${pc} 0%, ${ac} 100%)`,
+          }}
+        >
+          {persona.emoji}
+        </div>
+        <div className="mt-3 font-display text-[18px] md:text-[20px] text-white leading-tight">
+          {persona.name}
+        </div>
+        <div className="mt-1 text-[10px] uppercase tracking-[0.22em] text-white/55">
+          {persona.industry.split("—")[0].trim().slice(0, 22)}
+        </div>
+
+        {/* Audio waveform-ish indicator while talking */}
+        {playing && (
+          <div className="mt-4 flex items-end gap-1 h-5">
+            {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+              <span
+                key={i}
+                className="w-[3px] rounded-full bg-white/85"
+                style={{
+                  animation: `marketing-bar 900ms ease-in-out infinite`,
+                  animationDelay: `${i * 80}ms`,
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
       <style jsx>{`
-        @keyframes mc-mouth-talk {
-          0% { transform: scaleY(1); }
-          25% { transform: scaleY(1.7); }
-          50% { transform: scaleY(0.4); }
-          75% { transform: scaleY(1.3); }
-          100% { transform: scaleY(1); }
+        @keyframes marketing-bar {
+          0%, 100% {
+            height: 6px;
+          }
+          50% {
+            height: 18px;
+          }
         }
       `}</style>
     </div>

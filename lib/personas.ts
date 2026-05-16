@@ -53,7 +53,7 @@ Return strict JSON only — no markdown, no commentary. Use this exact shape:
   "primaryColor": "#RRGGBB (a deliberate brand color)",
   "accentColor": "#RRGGBB (a complementary lighter accent)",
   "emoji": "ONE emoji that fits",
-  "voiceGender": "female | male | neutral"
+  "voiceGender": "female | male — pick one, default female"
 }`;
 
   const prompt = `Brand brief from the operator:
@@ -96,9 +96,10 @@ Infer a complete brand persona. If the brief mentions a specific company, use wh
     primaryColor: normalizeHex(derived.primaryColor, "#F24016"),
     accentColor: normalizeHex(derived.accentColor, "#FFAF8C"),
     emoji: derived.emoji?.slice(0, 4) || "✦",
-    voiceGender: derived.voiceGender === "male" || derived.voiceGender === "neutral"
-      ? derived.voiceGender
-      : "female",
+    // Only allow "male" or "female" — "neutral" produced an avatar/voice mismatch
+    // (female avatar paired with male English voice when picker filtered nothing).
+    // Default to female unless Haiku explicitly says male.
+    voiceGender: derived.voiceGender === "male" ? "male" : "female",
   };
 }
 

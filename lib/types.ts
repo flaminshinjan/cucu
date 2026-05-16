@@ -62,11 +62,20 @@ export interface PlatformCopy {
   };
 }
 
+export type AvatarRenderStatus =
+  | "idle"
+  | "rendering"
+  | "ready"
+  | "failed"
+  | "unavailable";
+
 export interface ContentAssets {
   voiceAudioUrl?: string;
   avatarVideoUrl?: string;
   thumbnailUrl?: string;
   scriptHash: string;
+  avatarStatus?: AvatarRenderStatus;
+  avatarStatusReason?: string;
 }
 
 export interface BRollImage {

@@ -81,12 +81,16 @@ const _heygenDefaultsByGender: Map<string, { avatarId: string; voiceId: string }
 const heygenLogBucket: { _b?: number; _s?: string } = {};
 
 async function getHeygenDefaults(
-  gender: VoiceGender = "neutral",
+  inputGender: VoiceGender = "female",
 ): Promise<{ avatarId: string; voiceId: string }> {
   // Explicit env overrides always win.
   if (env.heygenAvatarId && env.heygenVoiceId) {
     return { avatarId: env.heygenAvatarId, voiceId: env.heygenVoiceId };
   }
+
+  // Defensive: "neutral" silently picks male in HeyGen's voice ordering, which
+  // pairs poorly with the female-by-luck avatar. Normalize to female.
+  const gender: VoiceGender = inputGender === "neutral" ? "female" : inputGender;
 
   const cached = _heygenDefaultsByGender.get(gender);
   if (cached) return cached;
@@ -113,18 +117,18 @@ async function getHeygenDefaults(
   const allAvatars = aJson.data?.avatars ?? [];
   const allVoices = vJson.data?.voices ?? [];
 
-  // Filter avatars: gender match + free tier when possible
+  // Filter avatars: strict gender match + prefer free tier
   const avatarsOfGender = allAvatars.filter(
-    (a) => gender === "neutral" || (a.gender ?? "").toLowerCase() === gender,
+    (a) => (a.gender ?? "").toLowerCase() === gender,
   );
   const freeAvatars = avatarsOfGender.filter((a) => a.premium === false);
 
-  // Filter voices: gender match + English when available
+  // Filter voices: strict gender match + English when available
   const isEnglish = (v: { language?: string }) =>
     v.language?.toLowerCase().includes("english") ||
     v.language?.toLowerCase().includes("en");
   const matchesGender = (v: { gender?: string }) =>
-    gender === "neutral" || (v.gender ?? "").toLowerCase() === gender;
+    (v.gender ?? "").toLowerCase() === gender;
 
   const englishGenderVoices = allVoices.filter((v) => isEnglish(v) && matchesGender(v));
   const anyGenderVoices = allVoices.filter(matchesGender);
@@ -156,6 +160,37 @@ async function getHeygenDefaults(
 }
 
 async function heygenRender(
+  req: AvatarRequest,
+  cacheKey: string,
+  durationSeconds: number,
+): Promise<AvatarResult> {
+  // HeyGen returns "Insufficient credit. This operation requires 'api' credits."
+  // as a generic rejection when their burst rate-limit fires, NOT only when
+  // credits are actually low. Symptom: failure within ~30s of submit even though
+  // the account has hundreds of credits. We treat that as a transient throttle:
+  // wait 60s, try once more. After that, fall back to the brand emblem.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await heygenRenderOnce(req, cacheKey, durationSeconds);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isCreditOrBurst = /insufficient credit|insufficient_credit/i.test(msg);
+      if (isCreditOrBurst && attempt === 1) {
+        console.log(`[heygen] caught burst-throttle; backing off 60s before retry`);
+        req.onProgress?.({
+          elapsedSeconds: 0,
+          status: "throttled — retrying in 60s",
+        });
+        await new Promise((r) => setTimeout(r, 60000));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw new Error("HeyGen render failed after burst-throttle retry");
+}
+
+async function heygenRenderOnce(
   req: AvatarRequest,
   cacheKey: string,
   durationSeconds: number,
@@ -242,34 +277,109 @@ async function didRender(
   cacheKey: string,
   durationSeconds: number,
 ): Promise<AvatarResult> {
+  // Pick a gender-appropriate presenter source + Azure TTS voice.
+  // User can override by uploading their own face via Studio (overrides source_url).
+  const sourceUrl =
+    req.studio?.talkingPhotoId && req.studio.talkingPhotoId.startsWith("http")
+      ? req.studio.talkingPhotoId
+      : pickDidSourceImage(req.gender);
+  const voiceConfig = pickDidVoice(req.gender);
+
   const create = await fetch("https://api.d-id.com/talks", {
     method: "POST",
     headers: {
       Authorization: `Basic ${env.didKey}`,
       "content-type": "application/json",
+      accept: "application/json",
     },
     body: JSON.stringify({
-      script: { type: "text", input: req.script },
-      source_url: "https://d-id-public-bucket.s3.us-west-2.amazonaws.com/alice.jpg",
+      script: {
+        type: "text",
+        input: req.script,
+        provider: voiceConfig,
+      },
+      source_url: sourceUrl,
+      config: {
+        fluent: true,
+        pad_audio: 0.0,
+        stitch: true,
+      },
     }),
   });
-  if (!create.ok) throw new Error(`D-ID create ${create.status}`);
-  const created = (await create.json()) as { id: string };
+  if (!create.ok) {
+    const body = await create.text().catch(() => "");
+    throw new Error(`D-ID create ${create.status}: ${body.slice(0, 200)}`);
+  }
+  const created = (await create.json()) as {
+    id?: string;
+    error?: { description?: string; kind?: string };
+  };
+  if (!created.id) {
+    throw new Error(
+      `D-ID returned no talk id: ${created.error?.description ?? JSON.stringify(created).slice(0, 200)}`,
+    );
+  }
+  const talkId = created.id;
+  console.log(`[did] talk submitted: ${talkId}  source=${sourceUrl.slice(0, 60)}  voice=${voiceConfig.voice_id}`);
+  req.onProgress?.({ elapsedSeconds: 0, status: `submitted (talk_id: ${talkId})` });
 
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 4000));
-    const status = await fetch(`https://api.d-id.com/talks/${created.id}`, {
+  // Poll up to 5 minutes — D-ID is typically <60s for talks under 30s of audio.
+  const POLL_INTERVAL_MS = 4000;
+  const MAX_POLLS = 75;
+  const start = Date.now();
+  let lastLoggedBucket = -1;
+  let lastLoggedStatus = "";
+
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const status = await fetch(`https://api.d-id.com/talks/${talkId}`, {
       headers: { Authorization: `Basic ${env.didKey}` },
     });
-    const sj = (await status.json()) as { status: string; result_url?: string };
+    const sj = (await status.json()) as {
+      status?: string;
+      result_url?: string;
+      error?: { description?: string; kind?: string };
+    };
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    const bucket = Math.floor(elapsed / 20);
+    if (i === 0 || bucket !== lastLoggedBucket || sj.status !== lastLoggedStatus) {
+      console.log(
+        `[did] poll t+${elapsed}s  status=${sj.status}  err=${sj.error?.description ?? ""}`,
+      );
+      lastLoggedBucket = bucket;
+      lastLoggedStatus = sj.status ?? "";
+    }
+    req.onProgress?.({ elapsedSeconds: elapsed, status: sj.status ?? "?" });
+
     if (sj.status === "done" && sj.result_url) {
       const mp4 = Buffer.from(await (await fetch(sj.result_url)).arrayBuffer());
       const url = await storage.put(cacheKey, mp4, "video/mp4");
       return { videoUrl: url, cached: false, provider: "did", durationSeconds };
     }
-    if (sj.status === "error") throw new Error("D-ID render failed");
+    if (sj.status === "error" || sj.status === "rejected") {
+      throw new Error(`D-ID failed: ${sj.error?.description ?? sj.error?.kind ?? "unknown"}`);
+    }
   }
-  throw new Error("D-ID render timed out");
+  throw new Error("D-ID render timed out after 5 minutes");
+}
+
+/** D-ID public sample portraits — both ship with the free tier. */
+function pickDidSourceImage(gender?: VoiceGender): string {
+  // 'Alice' — D-ID's documented female sample, known to work on free tier
+  const female = "https://d-id-public-bucket.s3.us-west-2.amazonaws.com/alice.jpg";
+  // 'Noelle' style — using the same public bucket pattern
+  const male = "https://d-id-public-bucket.s3.us-west-2.amazonaws.com/v3/noelle.jpeg";
+  if (gender === "male") return male;
+  return female;
+}
+
+/** Microsoft Azure TTS voices — D-ID's most reliable provider. */
+function pickDidVoice(gender?: VoiceGender): { type: "microsoft"; voice_id: string } {
+  if (gender === "male") {
+    return { type: "microsoft", voice_id: "en-US-GuyNeural" };
+  }
+  // Warm, conversational, professional — default for cucu
+  return { type: "microsoft", voice_id: "en-US-JennyNeural" };
 }
 
 function estimateDuration(script: string): number {

@@ -27,7 +27,8 @@ type Action =
   | { type: "start"; runId: string }
   | { type: "reset" }
   | { type: "event"; event: StreamEvent }
-  | { type: "snapshot"; run: ContentRun };
+  | { type: "snapshot"; run: ContentRun }
+  | { type: "load-history"; run: ContentRun };
 
 const initial: RunUIState = {
   runId: null,
@@ -48,6 +49,16 @@ function reducer(state: RunUIState, action: Action): RunUIState {
       return { ...initial, runId: action.runId, startedAt: Date.now() };
     case "snapshot":
       return { ...state, run: { ...state.run, ...action.run } };
+    case "load-history":
+      // Hydrate a completed run from localStorage straight to the "done" state.
+      return {
+        ...initial,
+        runId: action.run.id,
+        run: action.run,
+        stage: "done",
+        startedAt: action.run.createdAt,
+        finishedAt: Date.now(),
+      };
     case "event": {
       const e = action.event;
       let liveBuffers = state.liveBuffers;
@@ -89,8 +100,27 @@ function reducer(state: RunUIState, action: Action): RunUIState {
             run.assets = {
               ...(run.assets ?? { scriptHash: "" }),
               avatarVideoUrl: d.videoUrl,
+              avatarStatus: "ready",
             };
           }
+        }
+      }
+
+      // Avatar status events can arrive on tool-call (rendering started),
+      // thinking (heartbeat), tool-result (unavailable), result (ready), or error (failed).
+      if (e.agent === "art-director" && e.data && typeof e.data === "object") {
+        const d = e.data as {
+          kind?: string;
+          status?: "rendering" | "ready" | "failed" | "unavailable";
+          reason?: string;
+          isCredit?: boolean;
+        };
+        if (d.kind === "avatar-status" && d.status) {
+          run.assets = {
+            ...(run.assets ?? { scriptHash: "" }),
+            avatarStatus: d.status,
+            avatarStatusReason: d.reason ?? (d.isCredit ? "HeyGen API credits required" : undefined),
+          };
         }
       }
       if (e.type === "stage" && e.stage) {
@@ -141,16 +171,27 @@ export function useRun() {
 
     const es = new EventSource(`/api/stream/${runId}`);
     esRef.current = es;
+    let didFetchSnapshot = false;
+    const fetchSnapshot = () => {
+      if (didFetchSnapshot) return;
+      didFetchSnapshot = true;
+      void fetch(`/api/run/${runId}`)
+        .then((r) => r.json())
+        .then((j: { run: ContentRun }) => dispatch({ type: "snapshot", run: j.run }))
+        .catch(() => undefined);
+    };
     const handler = (e: MessageEvent) => {
       try {
         const parsed = JSON.parse(e.data) as StreamEvent;
         dispatch({ type: "event", event: parsed });
+        // Fetch the full run snapshot as soon as stage hits 'done' (compositions + assets land here).
+        // We don't wait for `complete` because the avatar render keeps the stream open for the
+        // hot-swap, and we need OutputView to have data immediately.
+        if (parsed.type === "stage" && parsed.stage === "done") {
+          fetchSnapshot();
+        }
         if (parsed.type === "complete" || parsed.type === "error") {
-          // Fetch full snapshot for compositions/assets
-          void fetch(`/api/run/${runId}`)
-            .then((r) => r.json())
-            .then((j: { run: ContentRun }) => dispatch({ type: "snapshot", run: j.run }))
-            .catch(() => undefined);
+          fetchSnapshot();
           es.close();
         }
       } catch {
@@ -176,7 +217,14 @@ export function useRun() {
     dispatch({ type: "reset" });
   }, []);
 
+  /** Hydrate state from a saved history entry — straight to the "done" view, no streaming. */
+  const loadFromHistory = useCallback((run: ContentRun) => {
+    esRef.current?.close();
+    esRef.current = null;
+    dispatch({ type: "load-history", run });
+  }, []);
+
   useEffect(() => () => esRef.current?.close(), []);
 
-  return { state, start, reset };
+  return { state, start, reset, loadFromHistory };
 }

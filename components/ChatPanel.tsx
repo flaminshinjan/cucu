@@ -5,17 +5,20 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   ArrowUp,
   CheckCircle2,
+  History,
   Loader2,
   Mic2,
   Sparkles,
   UserCircle2,
   Wand2,
 } from "lucide-react";
-import type { RunStage, StudioConfig } from "@/lib/types";
+import type { ContentRun, RunStage, StudioConfig } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/input";
 import { StudioSheet } from "@/components/StudioSheet";
+import { HistorySheet } from "@/components/HistorySheet";
 import type { ChatMessage } from "@/components/useChatHistory";
+import type { HistoryEntry } from "@/components/useRunHistory";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -34,6 +37,10 @@ interface Props {
   } | null;
   studioConfig: StudioConfig | null;
   onStudioChange: (next: StudioConfig | null) => void;
+  history: HistoryEntry[];
+  onLoadFromHistory: (run: ContentRun) => void;
+  onRemoveFromHistory: (id: string) => void;
+  onClearHistory: () => void;
 }
 
 const CAP_LABELS: Record<keyof Props["capabilities"] & string, string> = {
@@ -66,9 +73,14 @@ export function ChatPanel({
   capabilities,
   studioConfig,
   onStudioChange,
+  history,
+  onLoadFromHistory,
+  onRemoveFromHistory,
+  onClearHistory,
 }: Props) {
   const [draft, setDraft] = useState("");
   const [studioOpen, setStudioOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -110,25 +122,45 @@ export function ChatPanel({
       <div className="shrink-0">
         <div className="flex items-baseline justify-between mb-1">
           <h2 className="font-display text-xl text-ink-800 leading-none">Chat</h2>
-          <button
-            onClick={() => setStudioOpen(true)}
-            disabled={running}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] font-semibold border transition-colors",
-              studioActive
-                ? "border-signal-300 bg-signal-50 text-signal-700 hover:bg-signal-100"
-                : "border-ink-200 bg-cream-100 text-ink-500 hover:bg-cream-200",
-              running && "opacity-60 cursor-not-allowed",
-            )}
-            title="Upload your face and clone your voice"
-          >
-            <Wand2 size={10} />
-            Studio
-            {studioActive && <span className="h-1 w-1 rounded-full bg-signal-500" />}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setHistoryOpen(true)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] font-semibold border transition-colors",
+                history.length > 0
+                  ? "border-ink-200 bg-cream-100 text-ink-700 hover:bg-cream-200"
+                  : "border-ink-100 bg-cream-100/60 text-ink-400 hover:bg-cream-100",
+              )}
+              title="Past runs"
+            >
+              <History size={10} />
+              History
+              {history.length > 0 && (
+                <span className="text-ink-500 font-bold">
+                  {history.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setStudioOpen(true)}
+              disabled={running}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.12em] font-semibold border transition-colors",
+                studioActive
+                  ? "border-signal-300 bg-signal-50 text-signal-700 hover:bg-signal-100"
+                  : "border-ink-200 bg-cream-100 text-ink-500 hover:bg-cream-200",
+                running && "opacity-60 cursor-not-allowed",
+              )}
+              title="Upload your face and clone your voice"
+            >
+              <Wand2 size={10} />
+              Studio
+              {studioActive && <span className="h-1 w-1 rounded-full bg-signal-500" />}
+            </button>
+          </div>
         </div>
         <p className="text-xs text-ink-500">
-          Send a brief — cucu researches, writes, voices, and renders four platforms.
+          Send a brief — cucu researches, writes, voices, and renders one Instagram Reel.
         </p>
       </div>
 
@@ -137,6 +169,15 @@ export function ChatPanel({
         onOpenChange={setStudioOpen}
         config={studioConfig}
         onChange={onStudioChange}
+      />
+
+      <HistorySheet
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        history={history}
+        onLoad={onLoadFromHistory}
+        onRemove={onRemoveFromHistory}
+        onClear={onClearHistory}
       />
 
       {studioActive && (
@@ -348,11 +389,11 @@ function CucuBubble({
             </p>
           )}
 
-          {/* Done — show video count */}
+          {/* Done — single video ready */}
           {done && message.videoCount && message.videoCount > 0 && (
             <div className="mt-2 flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
               <CheckCircle2 size={12} />
-              {message.videoCount} platform videos ready · check the right panel
+              Instagram Reel ready · check the right panel
             </div>
           )}
 
