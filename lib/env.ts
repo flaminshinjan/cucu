@@ -33,4 +33,7 @@ export const capabilities = {
     (env.avatarProvider === "did" && !!env.didKey),
   hasReplicate: !!env.replicateToken,
   hasSupabase: !!env.supabaseUrl && !!env.supabaseKey,
+  // Voice cloning rides on Replicate XTTS-v2 (zero-shot), so it's enabled
+  // whenever Replicate is — no extra key needed.
+  hasVoiceClone: !!env.replicateToken,
 };

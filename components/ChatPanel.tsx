@@ -34,6 +34,7 @@ interface Props {
     hasAvatar: boolean;
     hasReplicate: boolean;
     hasSupabase: boolean;
+    hasVoiceClone: boolean;
   } | null;
   studioConfig: StudioConfig | null;
   onStudioChange: (next: StudioConfig | null) => void;
@@ -43,13 +44,14 @@ interface Props {
   onClearHistory: () => void;
 }
 
-const CAP_LABELS: Record<keyof Props["capabilities"] & string, string> = {
+const CAP_LABELS: Record<keyof NonNullable<Props["capabilities"]> & string, string> = {
   hasAnthropic: "Claude",
   hasTavily: "Tavily",
   hasTTS: "Voice",
   hasAvatar: "Avatar",
   hasReplicate: "Images",
   hasSupabase: "Supabase",
+  hasVoiceClone: "Voice clone",
 };
 
 const STAGE_LIVE_LABEL: Record<RunStage, string> = {
@@ -169,6 +171,7 @@ export function ChatPanel({
         onOpenChange={setStudioOpen}
         config={studioConfig}
         onChange={onStudioChange}
+        voiceCloneEnabled={capabilities?.hasVoiceClone ?? false}
       />
 
       <HistorySheet

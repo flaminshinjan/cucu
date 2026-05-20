@@ -190,6 +190,7 @@ export async function runArtDirector(
           ? {
               talkingPhotoId: studio.talkingPhotoId,
               voiceId: studio.voiceId,
+              voiceProvider: studio.voiceProvider,
               avatarId: studio.avatarId,
             }
           : undefined,

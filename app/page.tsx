@@ -18,6 +18,7 @@ interface Caps {
   hasAvatar: boolean;
   hasReplicate: boolean;
   hasSupabase: boolean;
+  hasVoiceClone: boolean;
 }
 
 interface Example {

@@ -37,6 +37,27 @@ export const storage = {
     }
   },
 
+  /** Read raw bytes back from storage. Used when we need to forward a stored
+   *  asset to an external API as inline bytes (e.g. Replicate data-URI inputs). */
+  async getBytes(key: string): Promise<Buffer | null> {
+    if (capabilities.hasSupabase) {
+      const url = `${env.supabaseUrl}/storage/v1/object/public/generated/${key}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return Buffer.from(await res.arrayBuffer());
+      } catch {
+        return null;
+      }
+    }
+    const full = path.join(PUBLIC_DIR, key);
+    try {
+      return await fs.readFile(full);
+    } catch {
+      return null;
+    }
+  },
+
   async put(key: string, data: Buffer, contentType: string): Promise<string> {
     if (capabilities.hasSupabase) {
       const url = `${env.supabaseUrl}/storage/v1/object/generated/${key}`;

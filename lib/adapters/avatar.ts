@@ -2,6 +2,8 @@ import { env, capabilities } from "../env";
 import { storage } from "./storage";
 import { hashString } from "../utils";
 import type { VoiceGender } from "../types";
+import { synthesizeWithSample } from "./voice-clone";
+import { uploadAudioAsset } from "./heygen";
 
 export interface AvatarRequest {
   script: string;
@@ -14,7 +16,10 @@ export interface AvatarRequest {
    *  When present, these win over the auto-discovered HeyGen defaults. */
   studio?: {
     talkingPhotoId?: string;
+    /** Storage key of the user voice sample (for voiceProvider="replicate") or
+     *  a HeyGen library voice_id (for voiceProvider="heygen"). */
     voiceId?: string;
+    voiceProvider?: "replicate" | "heygen";
     avatarId?: string;
   };
   /** Called once per poll tick so the UI can show heartbeat progress */
@@ -208,6 +213,18 @@ async function heygenRenderOnce(
     ? { type: "talking_photo" as const, talking_photo_id: talkingPhotoId }
     : { type: "avatar" as const, avatar_id: avatarId, avatar_style: "normal" };
 
+  // Voice routing:
+  //  - User uploaded a sample → synth script via Replicate XTTS-v2 (zero-shot),
+  //    upload result to HeyGen as an audio asset, pass `voice.type="audio"` so
+  //    HeyGen just lipsyncs.
+  //  - Otherwise → HeyGen's own TTS with a library voice_id.
+  let voicePayload: Record<string, unknown>;
+  if (req.studio?.voiceId && req.studio.voiceProvider === "replicate") {
+    voicePayload = await synthClonedVoiceForHeygen(req, req.studio.voiceId);
+  } else {
+    voicePayload = { type: "text", input_text: req.script, voice_id: voiceId };
+  }
+
   // HeyGen v2: create video → poll status → download URL
   const create = await fetch("https://api.heygen.com/v2/video/generate", {
     method: "POST",
@@ -219,7 +236,7 @@ async function heygenRenderOnce(
       video_inputs: [
         {
           character,
-          voice: { type: "text", input_text: req.script, voice_id: voiceId },
+          voice: voicePayload,
         },
       ],
       dimension: { width: 720, height: 1280 },
@@ -231,8 +248,12 @@ async function heygenRenderOnce(
   }
   const created = (await create.json()) as { data: { video_id: string } };
   const videoId = created.data.video_id;
+  const voiceDesc =
+    req.studio?.voiceProvider === "replicate"
+      ? `xtts-clone:${req.studio.voiceId}`
+      : voiceId;
   console.log(
-    `[heygen] video submitted: ${videoId}  character=${talkingPhotoId ? `talking_photo:${talkingPhotoId}` : `avatar:${avatarId}`}  voice=${voiceId}`,
+    `[heygen] video submitted: ${videoId}  character=${talkingPhotoId ? `talking_photo:${talkingPhotoId}` : `avatar:${avatarId}`}  voice=${voiceDesc}`,
   );
   req.onProgress?.({ elapsedSeconds: 0, status: `submitted (video_id: ${videoId})` });
 
@@ -285,6 +306,29 @@ async function didRender(
       : pickDidSourceImage(req.gender);
   const voiceConfig = pickDidVoice(req.gender);
 
+  // If the user uploaded a voice sample, synth the script via Replicate XTTS-v2
+  // and hand D-ID a public audio URL. D-ID needs to fetch the URL itself, so
+  // this only works with Supabase storage; in local dev we log and fall back
+  // to the Azure preset.
+  let script: Record<string, unknown> = {
+    type: "text",
+    input: req.script,
+    provider: voiceConfig,
+  };
+  if (req.studio?.voiceId && req.studio.voiceProvider === "replicate") {
+    if (capabilities.hasSupabase) {
+      const synth = await synthClonedVoiceBytes(req, req.studio.voiceId);
+      const audioKey = `voices/renders/${hashString(req.script + req.studio.voiceId)}.wav`;
+      const audioUrl = await storage.put(audioKey, synth.bytes, synth.contentType);
+      console.log(`[did] using XTTS clone audio_url=${audioUrl.slice(0, 80)}`);
+      script = { type: "audio", audio_url: audioUrl };
+    } else {
+      console.warn(
+        "[did] cloned voice requested but no Supabase storage — D-ID can't fetch a local URL. Falling back to Azure voice.",
+      );
+    }
+  }
+
   const create = await fetch("https://api.d-id.com/talks", {
     method: "POST",
     headers: {
@@ -293,11 +337,7 @@ async function didRender(
       accept: "application/json",
     },
     body: JSON.stringify({
-      script: {
-        type: "text",
-        input: req.script,
-        provider: voiceConfig,
-      },
+      script,
       source_url: sourceUrl,
       config: {
         fluent: true,
@@ -385,4 +425,67 @@ function pickDidVoice(gender?: VoiceGender): { type: "microsoft"; voice_id: stri
 function estimateDuration(script: string): number {
   const words = script.trim().split(/\s+/).length;
   return Math.max(5, Math.round((words / 155) * 60));
+}
+
+/* ─── Replicate XTTS-v2 cloned-voice helpers ─────────────────────────────── */
+
+const VOICE_RENDER_CACHE = new Map<string, { bytes: Buffer; contentType: "audio/x-wav" }>();
+
+/** Read sample bytes from storage, run XTTS-v2, return raw WAV. Caches per
+ *  (script, sample-key) so multi-step pipelines (HeyGen + D-ID) don't double-pay. */
+async function synthClonedVoiceBytes(
+  req: AvatarRequest,
+  sampleKey: string,
+): Promise<{ bytes: Buffer; contentType: "audio/x-wav" }> {
+  const cacheKey = `${sampleKey}|${hashString(req.script)}`;
+  const hit = VOICE_RENDER_CACHE.get(cacheKey);
+  if (hit) return hit;
+
+  const sample = await storage.getBytes(sampleKey);
+  if (!sample) {
+    throw new Error(`Voice sample missing from storage: ${sampleKey}`);
+  }
+  const sampleType = sniffAudioContentType(sampleKey);
+
+  req.onProgress?.({ elapsedSeconds: 0, status: "synthesizing your voice (XTTS-v2)" });
+  console.log(`[xtts] synthesizing  sample=${sampleKey}  bytes=${sample.length}  script.len=${req.script.length}`);
+  const synth = await synthesizeWithSample(req.script, sample, sampleType, {
+    language: "en",
+    cleanupVoice: true,
+  });
+  VOICE_RENDER_CACHE.set(cacheKey, synth);
+  return synth;
+}
+
+/** Same as above, but uploads the WAV to HeyGen as an audio asset and returns
+ *  a `voice` payload ready for the v2/video/generate request. */
+async function synthClonedVoiceForHeygen(
+  req: AvatarRequest,
+  sampleKey: string,
+): Promise<Record<string, unknown>> {
+  const synth = await synthClonedVoiceBytes(req, sampleKey);
+  const asset = await uploadAudioAsset(synth.bytes, synth.contentType);
+  console.log(
+    `[heygen] using cloned voice via audio_asset_id=${asset.audioAssetId} (xtts sample=${sampleKey})`,
+  );
+  return { type: "audio", audio_asset_id: asset.audioAssetId };
+}
+
+function sniffAudioContentType(key: string): string {
+  const ext = key.split(".").pop()?.toLowerCase() ?? "";
+  switch (ext) {
+    case "wav":
+      return "audio/wav";
+    case "m4a":
+    case "mp4":
+      return "audio/mp4";
+    case "ogg":
+      return "audio/ogg";
+    case "webm":
+      return "audio/webm";
+    case "mp3":
+    case "mpeg":
+    default:
+      return "audio/mpeg";
+  }
 }

@@ -24,7 +24,19 @@
       "Bash(gh --version)",
       "Bash(gh auth *)",
       "Bash(git -C /Users/shinjan/Desktop/cucu rev-parse --is-inside-work-tree)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "WebSearch",
+      "WebFetch(domain:docs.heygen.com)",
+      "WebFetch(domain:developers.heygen.com)",
+      "WebFetch(domain:community.heygen.com)",
+      "Read(//Users/shinjan/**)",
+      "WebFetch(domain:replicate.com)",
+      "Bash(curl -s https://raw.githubusercontent.com/lucataco/cog-xtts-v2/main/predict.py)",
+      "Bash(curl -sS \"https://api.replicate.com/v1/models/lucataco/xtts-v2\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); v=d.get\\('latest_version',{}\\); print\\('id:', v.get\\('id'\\)\\)\")",
+      "Bash(curl -sS \"https://api.replicate.com/v1/models/lucataco/xtts-v2/versions\" -H \"Authorization: Bearer dummy\")",
+      "Bash(git ls-remote *)",
+      "Bash(env)"
     ]
   }
 }

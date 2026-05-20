@@ -122,8 +122,11 @@ export interface CustomBrief {
 export interface StudioConfig {
   /** HeyGen talking_photo_id from uploading a user-supplied face image. */
   talkingPhotoId?: string;
-  /** HeyGen voice_id (cloned via Instant Voice Clone or picked from the library). */
+  /** Storage key of the uploaded voice sample. XTTS-v2 is zero-shot, so the
+   *  "voice id" is really a pointer to the audio we'll resend on every render. */
   voiceId?: string;
+  /** Which TTS pipeline owns voiceId — drives how we synthesize at render time. */
+  voiceProvider?: "replicate" | "heygen";
   /** HeyGen avatar_id (picked from the public library). */
   avatarId?: string;
   /** Display labels for the UI so we don't lose context after refresh. */

@@ -6,6 +6,7 @@ import {
   AudioLines,
   CheckCircle2,
   ImageUp,
+  KeyRound,
   Loader2,
   Mic2,
   Trash2,
@@ -30,10 +31,19 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   config: StudioConfig | null;
   onChange: (config: StudioConfig | null) => void;
+  /** True when REPLICATE_API_TOKEN is set — gates the Voice tab. */
+  voiceCloneEnabled?: boolean;
   trigger?: React.ReactNode;
 }
 
-export function StudioSheet({ open, onOpenChange, config, onChange, trigger }: Props) {
+export function StudioSheet({
+  open,
+  onOpenChange,
+  config,
+  onChange,
+  voiceCloneEnabled = false,
+  trigger,
+}: Props) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
@@ -61,13 +71,13 @@ export function StudioSheet({ open, onOpenChange, config, onChange, trigger }: P
             <PhotoTab config={config} onChange={onChange} />
           </TabsContent>
           <TabsContent value="voice" className="px-5 py-5 mt-0">
-            <VoiceTab config={config} onChange={onChange} />
+            <VoiceTab config={config} onChange={onChange} enabled={voiceCloneEnabled} />
           </TabsContent>
         </Tabs>
 
         <div className="px-5 py-3 border-t border-ink-100 flex items-center justify-between bg-cream-100/50">
           <span className="text-[10.5px] text-ink-400">
-            HeyGen plan must support Talking Photo / Voice Clone
+            Face: HeyGen Talking Photo · Voice clone: Replicate XTTS-v2
           </span>
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
             Done
@@ -242,9 +252,11 @@ function PhotoTab({
 function VoiceTab({
   config,
   onChange,
+  enabled,
 }: {
   config: StudioConfig | null;
   onChange: (c: StudioConfig | null) => void;
+  enabled: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -280,6 +292,7 @@ function VoiceTab({
       const json = (await res.json()) as {
         voiceId?: string;
         name?: string;
+        provider?: "replicate" | "heygen";
         error?: string;
       };
       if (!res.ok || !json.voiceId) {
@@ -288,6 +301,7 @@ function VoiceTab({
       onChange({
         ...(config ?? {}),
         voiceId: json.voiceId,
+        voiceProvider: json.provider ?? "replicate",
         voiceLabel: json.name ?? file.name,
       });
     } catch (e) {
@@ -302,17 +316,46 @@ function VoiceTab({
     setDuration(null);
     const next = { ...(config ?? {}) };
     delete next.voiceId;
+    delete next.voiceProvider;
     delete next.voiceLabel;
     onChange(Object.keys(next).length > 0 ? next : null);
   }
 
   const hasVoice = !!config?.voiceId;
 
+  if (!enabled) {
+    return (
+      <div className="space-y-3">
+        <div className="text-sm text-ink-600 leading-relaxed">
+          Voice cloning runs on Coqui XTTS-v2 (Replicate) — zero-shot from a single
+          sample. cucu pipes the synthesized track into HeyGen for lipsync.
+        </div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex items-start gap-3">
+          <KeyRound size={18} className="text-amber-600 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <div className="text-[12.5px] font-medium text-amber-900">
+              Set <code className="font-mono text-[11.5px]">REPLICATE_API_TOKEN</code> to unlock
+            </div>
+            <div className="text-[11.5px] text-amber-800/90 mt-0.5 leading-snug">
+              Replicate&apos;s free starter credits cover demos. Add the key to
+              <code className="font-mono text-[11px] mx-1">.env.local</code>and restart the dev server.
+            </div>
+          </div>
+        </div>
+        <div className="text-[11px] text-ink-400 leading-relaxed">
+          Until then, cucu picks a gender-matched HeyGen library voice based on the brand
+          persona derived from your brief.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="text-sm text-ink-600 leading-relaxed">
         Upload 30–60 seconds of clean speech (your voice, one speaker, no music).
-        cucu sends it to HeyGen Instant Voice Clone.
+        cucu runs Coqui XTTS-v2 zero-shot on Replicate and lipsyncs the result
+        with HeyGen on every render.
       </div>
 
       <AnimatePresence mode="wait">
@@ -336,7 +379,7 @@ function VoiceTab({
                   {config?.voiceLabel ?? "Cloned voice"}
                 </div>
                 <div className="text-[10.5px] text-ink-400 mt-0.5 truncate">
-                  Voice ID: {config?.voiceId}
+                  Sample: {shortSampleId(config?.voiceId)}
                 </div>
                 {previewUrl && (
                   <audio
@@ -411,6 +454,13 @@ function VoiceTab({
       )}
     </div>
   );
+}
+
+function shortSampleId(key?: string): string {
+  if (!key) return "—";
+  // voices/samples/<hash>.<ext>
+  const m = key.match(/([a-z0-9]+)\.[a-z0-9]+$/i);
+  return m ? m[1].slice(0, 10) : key.slice(-10);
 }
 
 function measureAudioDuration(url: string): Promise<number> {

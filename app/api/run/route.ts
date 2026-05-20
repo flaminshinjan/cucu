@@ -16,6 +16,7 @@ const Body = z.object({
     .object({
       talkingPhotoId: z.string().trim().max(200).optional(),
       voiceId: z.string().trim().max(200).optional(),
+      voiceProvider: z.enum(["replicate", "heygen"]).optional(),
       avatarId: z.string().trim().max(200).optional(),
       talkingPhotoLabel: z.string().trim().max(200).optional(),
       voiceLabel: z.string().trim().max(200).optional(),
@@ -45,6 +46,7 @@ export async function POST(req: Request) {
     ? {
         talkingPhotoId: studioRaw.talkingPhotoId || undefined,
         voiceId: studioRaw.voiceId || undefined,
+        voiceProvider: studioRaw.voiceProvider || undefined,
         avatarId: studioRaw.avatarId || undefined,
         talkingPhotoLabel: studioRaw.talkingPhotoLabel || undefined,
         voiceLabel: studioRaw.voiceLabel || undefined,
